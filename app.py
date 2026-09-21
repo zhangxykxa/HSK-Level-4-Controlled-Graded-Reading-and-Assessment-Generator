@@ -186,21 +186,28 @@ def _secret(key: str):
 
 
 def _clean_token(v):
-    """规整 API Key / 模型名：去首尾空白，剥除误粘贴的 'Bearer ' 前缀。"""
+    """规整 API Key / 模型名：剥除 'Bearer ' 前缀，仅保留 ASCII 可见字符，
+    剔除所有空白（含内部）与非 ASCII 字符。
+
+    防止 httpx 编码 ``Authorization`` 头时抛 UnicodeEncodeError（典型现象：
+    ``'ascii' codec can't encode characters in position 7-11``），常见于
+    Key 粘贴时夹带全角空格 / 隐藏字符 / 中文标点。
+    """
     if not v:
         return None
     s = str(v).strip()
     if s.lower().startswith("bearer "):
         s = s[7:].strip()
+    s = "".join(c for c in s if c.isascii() and c.isprintable() and not c.isspace())
     return s or None
 
 
 def _clean_base_url(v):
-    """规整 Base URL：去首尾空白与末尾斜杠，避免拼接双斜杠导致鉴权异常。"""
+    """规整 Base URL：仅保留 ASCII 可见字符，去末尾斜杠，避免拼接异常。"""
     if not v:
         return None
-    s = str(v).strip().rstrip("/")
-    return s or None
+    s = "".join(c for c in str(v) if c.isascii() and c.isprintable() and not c.isspace())
+    return s.rstrip("/") or None
 
 
 def _resolve_api_config(api_key_input, base_url_input, model_input):
@@ -465,8 +472,19 @@ with col1:
                         # 兜底：非 HTTP 状态类的 openai 异常（如请求构造错误）
                         st.error(f"API 调用失败：{e}")
                         text = ""
+                    except UnicodeEncodeError as e:
+                        st.error(
+                            "🔤 编码错误：配置中含非 ASCII 字符（常见于 Key 粘贴时夹带\n"
+                            "全角空格 / 隐藏字符 / 中文标点）。已自动清洗 Key/Base URL/Model\n"
+                            "的非 ASCII 字符；若仍失败请重新复制纯净的 Key。\n\n"
+                            f"原始报错：{e}"
+                        )
+                        text = ""
                     except Exception as e:  # 兜底：其它服务商返回的非标准异常
-                        st.error(f"生成失败：{e}")
+                        import traceback as _tb
+                        st.error(f"生成失败（{type(e).__name__}）：{e}")
+                        with st.expander("🔎 查看完整错误堆栈 (Traceback)", expanded=False):
+                            st.code(_tb.format_exc(), language="python")
                         text = ""
 
                     if text:
