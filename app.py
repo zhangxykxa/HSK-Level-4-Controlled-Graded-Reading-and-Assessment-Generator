@@ -185,17 +185,38 @@ def _secret(key: str):
         return None
 
 
+def _clean_token(v):
+    """规整 API Key / 模型名：去首尾空白，剥除误粘贴的 'Bearer ' 前缀。"""
+    if not v:
+        return None
+    s = str(v).strip()
+    if s.lower().startswith("bearer "):
+        s = s[7:].strip()
+    return s or None
+
+
+def _clean_base_url(v):
+    """规整 Base URL：去首尾空白与末尾斜杠，避免拼接双斜杠导致鉴权异常。"""
+    if not v:
+        return None
+    s = str(v).strip().rstrip("/")
+    return s or None
+
+
 def _resolve_api_config(api_key_input, base_url_input, model_input):
     """按优先级解析 API 配置：侧边栏输入 > 环境变量 > st.secrets。
+
+    自动规整：Key 去空白/剥 ``Bearer `` 前缀、base_url 去末尾斜杠、
+    model 去空白。这类粘贴瑕疵常导致 401 'Token is invalid'。
 
     Returns:
         (api_key, base_url, model)，缺失项为 ``None``。其中 ``base_url`` 为
         ``None`` 时由 ``openai`` 库回退到 OpenAI 官方端点。
     """
-    api_key = api_key_input or os.environ.get("OPENAI_API_KEY") or _secret("OPENAI_API_KEY")
-    base_url = base_url_input or os.environ.get("OPENAI_BASE_URL") or _secret("OPENAI_BASE_URL")
-    model = model_input or os.environ.get("OPENAI_MODEL") or _secret("OPENAI_MODEL")
-    return api_key or None, base_url or None, model or None
+    raw_key = api_key_input or os.environ.get("OPENAI_API_KEY") or _secret("OPENAI_API_KEY")
+    raw_url = base_url_input or os.environ.get("OPENAI_BASE_URL") or _secret("OPENAI_BASE_URL")
+    raw_model = model_input or os.environ.get("OPENAI_MODEL") or _secret("OPENAI_MODEL")
+    return _clean_token(raw_key), _clean_base_url(raw_url), _clean_token(raw_model)
 
 
 def build_generation_messages(
@@ -396,9 +417,15 @@ with col1:
                             stream_reading_text(api_key_r, base_url_r, model_r, messages)
                         )
                     except openai.AuthenticationError as e:
+                        msg = str(e)
                         st.error(
-                            "🔑 鉴权失败：请检查 API Key 是否正确、是否对应所选服务商。\n\n"
-                            f"原始报错：{e}"
+                            "🔑 鉴权失败（HTTP 401）：服务商拒绝该 API Key。\n\n"
+                            "常见原因与排查：\n"
+                            "1. Key 夓带了首尾空格 / `Bearer ` 前缀 → 已自动清洗，若仍失败请重新复制完整 Key；\n"
+                            "2. Key 与所选服务商不匹配（OpenAI 的 Key 不能用于 SiliconFlow/DeepSeek，反之亦然）；\n"
+                            "3. Key 已被删除/过期 → 前往对应控制台重新生成；\n"
+                            "4. 账号未实名/未激活 → SiliconFlow 需完成手机号验证后 Key 才生效。\n\n"
+                            f"原始报错：{msg}"
                         )
                         text = ""
                     except openai.APIConnectionError as e:
