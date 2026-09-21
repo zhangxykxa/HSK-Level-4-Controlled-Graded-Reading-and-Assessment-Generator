@@ -1,4 +1,5 @@
 import hashlib
+import os
 from pathlib import Path
 
 import streamlit as st
@@ -161,6 +162,106 @@ def render_locked_words(words_df: pd.DataFrame, topic_label: str) -> None:
 
 
 # ============================================================================
+# 大模型 API 配置与调用（OpenAI 兼容：支持 OpenAI / DeepSeek / SiliconFlow 等）
+# ============================================================================
+
+# 服务商预设（均为 OpenAI 兼容端点，base_url / model 可在侧边栏手动覆盖）
+LLM_PRESETS = {
+    "OpenAI (官方)": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+    "DeepSeek (深度求索)": {"base_url": "https://api.deepseek.com", "model": "deepseek-chat"},
+    "SiliconFlow (硅基流动)": {
+        "base_url": "https://api.siliconflow.cn/v1",
+        "model": "Qwen/Qwen2.5-7B-Instruct",
+    },
+    "自定义 (Custom)": {"base_url": "", "model": ""},
+}
+
+
+def _secret(key: str):
+    """安全读取 st.secrets，缺失时返回 None（兼容本地无 secrets 文件的环境）。"""
+    try:
+        return st.secrets[key]
+    except (KeyError, FileNotFoundError):
+        return None
+
+
+def _resolve_api_config(api_key_input, base_url_input, model_input):
+    """按优先级解析 API 配置：侧边栏输入 > 环境变量 > st.secrets。
+
+    Returns:
+        (api_key, base_url, model)，缺失项为 ``None``。其中 ``base_url`` 为
+        ``None`` 时由 ``openai`` 库回退到 OpenAI 官方端点。
+    """
+    api_key = api_key_input or os.environ.get("OPENAI_API_KEY") or _secret("OPENAI_API_KEY")
+    base_url = base_url_input or os.environ.get("OPENAI_BASE_URL") or _secret("OPENAI_BASE_URL")
+    model = model_input or os.environ.get("OPENAI_MODEL") or _secret("OPENAI_MODEL")
+    return api_key or None, base_url or None, model or None
+
+
+def build_generation_messages(
+    words_df: pd.DataFrame,
+    topic_label: str,
+    syllabus_version: str,
+    char_limit: int,
+) -> list[dict]:
+    """组装分级阅读生成的 System / User 提示词。
+
+    将大纲版本、教学主题、字数限制与锁定的核心词汇列表（含拼音、词性、
+    释义）一并注入 System Prompt，约束模型在 HSK 1–4 级词汇范围内创作，
+    并在文末附「核心词回顾」。
+    """
+    topic = _map_topic(topic_label)
+    version_short = "2.0" if "2.0" in syllabus_version else "3.0"
+    word_list = []
+    if words_df is not None and not words_df.empty:
+        for _, r in words_df.iterrows():
+            word_list.append(
+                f"{r['Word']}（{r.get('Pinyin', '')}，{r.get('POS', '')}："
+                f"{r.get('Definition', '')}）"
+            )
+    vocab_block = "\n".join(f"- {w}" for w in word_list) if word_list else "- （无）"
+
+    system_prompt = f"""你是一名资深的国际中文教师与分级阅读材料编写专家，精通 HSK（汉语水平考试）词汇大纲。请根据以下教学约束，创作一篇适合 HSK 4 级学习者的中文分级阅读短文。
+
+【大纲版本】HSK {version_short}
+【教学主题】{topic}
+【目标字数】约 {char_limit} 个汉字（允许 ±10% 浮动）
+【必须融入的核心词汇】以下 {len(word_list)} 个 HSK 4 级目标词，须自然、准确地融入文中（可变形但不改变词义核心）：
+{vocab_block}
+
+【写作要求】
+1. 词汇难度严格控制在 HSK 1–4 级范围内，不得使用 HSK 5/6 级超纲词。
+2. 句式多样但规范，避免过长嵌套，适合中级学习者阅读。
+3. 内容紧扣「{topic}」主题，情节完整、逻辑连贯、有真实生活气息。
+4. 全部核心词须在文中出现，并在文末以「核心词回顾」列表形式再次列出（词 + 拼音 + 简释）。
+5. 仅输出短文正文与「核心词回顾」两段，不要输出任何额外解释、标题编号或英文翻译。
+
+现在请开始创作。"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "请直接输出分级阅读短文。"},
+    ]
+
+
+def stream_reading_text(api_key, base_url, model, messages, temperature=0.7):
+    """调用 OpenAI 兼容接口，以流式生成器逐段 yield 文本片段。
+
+    供 ``st.write_stream`` 消费，实现逐字实时渲染。``base_url`` 为 ``None`` 时
+    使用 OpenAI 官方端点；填入 DeepSeek / SiliconFlow 等兼容端点即可切换服务商。
+    """
+    client = openai.OpenAI(api_key=api_key, base_url=base_url or None)
+    stream = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        stream=True,
+    )
+    for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+
+# ============================================================================
 # 2. 侧边栏（Sidebar）- 教学参数控制面板
 # ============================================================================
 st.sidebar.header("⚙️ 教学参数设置 (Pedagogical Parameters)")
@@ -194,8 +295,44 @@ target_vocab_count = st.sidebar.slider("4. 融入核心词数量 (Target Vocabul
 if st.sidebar.button("🔄 重新随机锁定 (Reshuffle)", use_container_width=True):
     st.session_state["lock_seed"] = st.session_state.get("lock_seed", 0) + 1
 
-# API 密钥配置 (可输入你自己的 Key)
-api_key = st.sidebar.text_input("🔑 输入 OpenAI/API Key (或使用默认):", type="password")
+# --- 大模型 API 配置（侧边栏输入优先，回退 env / st.secrets）---
+st.sidebar.markdown("### 🤖 大模型 API 配置")
+
+# 初始化预设字段，使服务商切换时自动填充 base_url / model
+if "cfg_provider" not in st.session_state:
+    st.session_state["cfg_provider"] = list(LLM_PRESETS.keys())[0]
+if "cfg_base_url" not in st.session_state:
+    st.session_state["cfg_base_url"] = LLM_PRESETS[st.session_state["cfg_provider"]]["base_url"]
+if "cfg_model" not in st.session_state:
+    st.session_state["cfg_model"] = LLM_PRESETS[st.session_state["cfg_provider"]]["model"]
+
+
+def _apply_provider_preset():
+    """服务商切换时，把 base_url / model 同步为该服务商预设值。"""
+    p = LLM_PRESETS[st.session_state["cfg_provider"]]
+    st.session_state["cfg_base_url"] = p["base_url"]
+    st.session_state["cfg_model"] = p["model"]
+
+
+provider = st.sidebar.selectbox(
+    "服务商预设 (Provider):",
+    list(LLM_PRESETS.keys()),
+    key="cfg_provider",
+    on_change=_apply_provider_preset,
+    help="选择 OpenAI / DeepSeek / SiliconFlow 等兼容服务商；下方字段可手动覆盖",
+)
+api_key = st.sidebar.text_input(
+    "🔑 API Key", type="password", key="cfg_api_key",
+    help="留空则依次读取环境变量 OPENAI_API_KEY / st.secrets",
+)
+base_url = st.sidebar.text_input(
+    "🌐 Base URL (OpenAI 兼容)", key="cfg_base_url",
+    help="如 https://api.deepseek.com 或 https://api.siliconflow.cn/v1",
+)
+model = st.sidebar.text_input(
+    "🏷️ 模型名 (Model)", key="cfg_model",
+    help="如 gpt-4o-mini / deepseek-chat / Qwen/Qwen2.5-7B-Instruct",
+)
 
 st.sidebar.write("---")
 st.sidebar.markdown("💡 *本原型专为语言教师备课设计，生成材料严格受控于所选大纲词库。*")
@@ -228,22 +365,76 @@ col1, col2 = st.columns([1, 1])
 
 with col1:
     st.header("📝 1. 生成分级阅读材料")
-    st.write("点击下方按钮，系统将根据设置的大纲和主题生成受控文章：")
-    
-    # 临时占位，后续在此接入真实的词汇库抽取逻辑
-    if st.button("🚀 一键生成 HSK 4 级阅读 (Generate Text)", type="primary"):
-        st.info("🔄 正在调用大模型 API 并根据大纲词库进行受控生成...")
-        
-        # 模拟展示，第5-6周我们会把这里替换为真实的 API 调用和 Prompt
-        st.success("✨ 文章生成成功！(当前为测试模拟预览)")
-        simulated_text = """    小明在一家电脑公司工作。他觉得自己的**工作**很有意思，但是最近公司有很多新**安排**。因为公司要**招聘**新的职员，所以小明需要准备很多**简历**。他的经理对他说：“如果你这次面试准备得好，我相信你一定会非常**顺利**地通过考核，成为合格的部门主管。”"""
-        st.write(simulated_text)
-        
-        st.write("---")
-        st.markdown("**💡 融入的 HSK 4 核心词提示 (Vocabulary Tooltips):**")
-        st.caption("• **安排 (ān pái)**: to arrange; to plan")
-        st.caption("• **简历 (jiǎn lì)**: resume; CV")
-        st.caption("• **顺利 (shùn lì)**: smoothly; successfully")
+    st.write("点击下方按钮，系统将根据大纲、主题与锁定词汇调用大模型生成受控文章：")
+
+    gen_clicked = st.button("🚀 一键生成 HSK 4 级阅读 (Generate Text)", type="primary")
+
+    # 输出区：生成时流式写入；非生成轮次持久展示上一次结果
+    out = st.container(border=True)
+    with out:
+        if gen_clicked:
+            # —— 前置校验：锁定词汇 ——
+            if locked_words is None or locked_words.empty:
+                st.warning("当前主题下没有可用的 HSK 4 级核心词，请先更换主题/大纲或重新锁定。")
+            else:
+                api_key_r, base_url_r, model_r = _resolve_api_config(api_key, base_url, model)
+                if not api_key_r:
+                    st.error(
+                        "未获取到 API Key：请在侧边栏填写，或在环境变量 / st.secrets 中"
+                        "设置 OPENAI_API_KEY。"
+                    )
+                elif not model_r:
+                    st.error("未指定模型名：请在侧边栏填写模型名（如 gpt-4o-mini / deepseek-chat）。")
+                else:
+                    messages = build_generation_messages(
+                        locked_words, theme_choice, syllabus_version, char_limit
+                    )
+                    endpoint = base_url_r or "OpenAI 官方端点"
+                    st.caption(f"📡 调用：{model_r} @ {endpoint}")
+                    try:
+                        text = st.write_stream(
+                            stream_reading_text(api_key_r, base_url_r, model_r, messages)
+                        )
+                    except openai.AuthenticationError as e:
+                        st.error(f"鉴权失败：{e}（请检查 API Key 是否正确）")
+                        text = ""
+                    except openai.APIConnectionError as e:
+                        st.error(f"无法连接 API（{endpoint}）：{e}")
+                        text = ""
+                    except openai.APIError as e:
+                        st.error(f"API 调用失败：{e}")
+                        text = ""
+                    except Exception as e:  # 兜底：其它服务商返回的非标准异常
+                        st.error(f"生成失败：{e}")
+                        text = ""
+
+                    if text:
+                        st.session_state["generated_text"] = text
+                        st.session_state["generated_topic"] = theme_choice
+                        st.success("✨ 文章生成成功！")
+                        st.markdown("---")
+                        st.markdown("**💡 本轮锁定的核心词 (Vocabulary Tooltips):**")
+                        tips = [
+                            f"**{r['Word']}** ({r.get('Pinyin', '')})："
+                            f"{r.get('Definition', '')}"
+                            for _, r in locked_words.iterrows()
+                        ]
+                        st.markdown("\n".join(f"- {t}" for t in tips))
+                        st.download_button(
+                            "⬇️ 下载文章 (TXT)",
+                            text.encode("utf-8"),
+                            file_name="hsk4_reading.txt",
+                            mime="text/plain",
+                        )
+        elif st.session_state.get("generated_text"):
+            # 非生成轮次：持久展示上一次生成结果，避免跨 rerun 丢失
+            st.markdown(st.session_state["generated_text"])
+            st.download_button(
+                "⬇️ 下载文章 (TXT)",
+                st.session_state["generated_text"].encode("utf-8"),
+                file_name="hsk4_reading.txt",
+                mime="text/plain",
+            )
 
 with col2:
     st.header("✍️ 2. 生成 HSK 4 单项选择题")
