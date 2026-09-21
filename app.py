@@ -289,6 +289,123 @@ def stream_reading_text(api_key, base_url, model, messages, temperature=0.7):
             yield chunk.choices[0].delta.content
 
 
+# ----------------------------------------------------------------------------
+# MCQ（四选一阅读理解单选题）生成
+# ----------------------------------------------------------------------------
+
+def build_mcq_messages(
+    article_text: str,
+    words_df: pd.DataFrame,
+    num_questions: int = 2,
+) -> list[dict]:
+    """组装 MCQ 生成的 System / User 提示词。
+
+    要求大模型针对文章核心事实或目标词汇，出 ``num_questions`` 道四选一
+    阅读理解题。严格约束干扰项须具备迷惑性，并以 JSON 格式返回。
+    """
+    word_list = []
+    if words_df is not None and not words_df.empty:
+        for _, r in words_df.iterrows():
+            word_list.append(
+                f"{r['Word']}（{r.get('Pinyin', '')}，{r.get('POS', '')}："
+                f"{r.get('Definition', '')}）"
+            )
+    vocab_block = "\n".join(f"- {w}" for w in word_list) if word_list else "- （无）"
+
+    system_prompt = f"""你是一名国际汉语教学测评专家，擅长为 HSK 4 级学习者设计高质量的阅读理解单项选择题（MCQ）。
+
+请根据以下文章与目标词汇，出 {num_questions} 道四选一阅读理解题。
+
+【文章内容】
+{article_text}
+
+【目标词汇（HSK 4 级）】
+{vocab_block}
+
+【出题要求】
+1. 题目须针对文章核心事实或目标词汇的用法/含义设问，避免考查无关细节。
+2. 每题提供 A/B/C/D 四个选项，其中只有一个正确答案。
+3. **干扰项（Distractors）必须具备迷惑性**——干扰项应与文章内容相关、语义合理且语法正确，不得出现荒谬、无关或"一眼假"的选项。干扰项最好利用文章中的近似表达、同义词、或学习者的常见误解来设置。
+4. 每题附上详细解析，说明正确答案为何正确、各干扰项为何不正确（引用文章原文或目标词汇释义）。
+5. 选项文本语言为中文，难度控制在 HSK 4 级以内。
+
+【输出格式】
+请严格输出以下 JSON 数组（不要输出任何额外文字、Markdown 标记或解释）：
+
+[
+  {{
+    "question": "题干文本",
+    "options": {{
+      "A": "选项A内容",
+      "B": "选项B内容",
+      "C": "选项C内容",
+      "D": "选项D内容"
+    }},
+    "answer": "A",
+    "explanation": "正确答案为A，因为……；B/C/D不正确，因为……。"
+  }}
+]"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"请基于上述文章出 {num_questions} 道 MCQ，严格按 JSON 数组格式输出。"},
+    ]
+
+
+def generate_mcq(api_key, base_url, model, messages, temperature=0.5) -> str:
+    """调用大模型生成 MCQ，返回完整的原始 JSON 文本字符串。
+
+    与 :func:`stream_reading_text` 不同，MCQ 生成使用**非流式**调用，
+    因为本场景需要一次性获取完整 JSON 后解析为结构化题目。
+    """
+    client = openai.OpenAI(api_key=api_key, base_url=base_url or None)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        stream=False,
+    )
+    return resp.choices[0].message.content or ""
+
+
+def parse_mcq_json(raw: str) -> list[dict]:
+    """从大模型返回文本中解析 MCQ JSON 数组。
+
+    自动剥离常见包裹：```json ... ``` 围栏、首尾多余文字。
+    解析失败时返回空列表，调用方可据此展示友好错误提示。
+    """
+    import json
+    import re
+
+    text = raw.strip()
+    # 剥离 ```json ... ``` 围栏
+    fence = re.search(r"```(?:json)?\s*(.+?)\s*```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    # 提取第一个 JSON 数组
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        text = text[start : end + 1]
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    # 校验每道题结构
+    valid = []
+    for item in data:
+        if (
+            isinstance(item, dict)
+            and "question" in item
+            and "options" in item
+            and "answer" in item
+            and "explanation" in item
+            and all(k in item["options"] for k in ("A", "B", "C", "D"))
+            and item["answer"] in ("A", "B", "C", "D")
+        ):
+            valid.append(item)
+    return valid
+
+
 # ============================================================================
 # 2. 侧边栏（Sidebar）- 教学参数控制面板
 # ============================================================================
@@ -517,22 +634,112 @@ with col1:
 
 with col2:
     st.header("✍️ 2. 生成 HSK 4 单项选择题")
-    st.write("根据左侧生成的文章，自动配置具有高干扰效度的四选一阅读理解题：")
-    
-    if st.button("❓ 一键出题 (Generate MCQ)"):
-        st.info("🔄 正在提取核心词，并根据相同词性与语义生成干扰项...")
-        
-        # 模拟展示，第5-6周我们会在这里接入自动干扰项生成算法
-        st.success("✨ 习题生成成功！(当前为测试模拟预览)")
-        st.markdown("**问题：根据文章，小明最近为什么需要准备很多简历？**")
-        st.radio(
-            "选择你的答案：",
-            [
-                "A. 因为公司最近有很多新【安排】",
-                "B. 因为公司正在【招聘】新职员",
-                "C. 因为他的工作没有意思",
-                "D. 因为他想离开这家公司"
+    st.write("根据左侧生成的文章，自动调用大模型出 1–2 道具有高干扰效度的四选一阅读理解题：")
+
+    gen_mcq_clicked = st.button("❓ 一键出题 (Generate MCQ)", type="primary")
+
+    # 出题按钮触发：提取左侧文章 + 目标词汇 -> 调用大模型生成 MCQ
+    if gen_mcq_clicked:
+        article_text = st.session_state.get("generated_text", "")
+        if not article_text:
+            st.warning("⚠️ 左侧尚未生成文章，请先点击「一键生成 HSK 4 级阅读」。")
+        else:
+            api_key_r, base_url_r, model_r = _resolve_api_config(api_key, base_url, model)
+            if not api_key_r:
+                st.error("未获取到 API Key：请在侧边栏填写，或在环境变量 / st.secrets 中设置 OPENAI_API_KEY。")
+            elif not model_r:
+                st.error("未指定模型名：请在侧边栏填写模型名（如 gpt-4o-mini / deepseek-chat）。")
+            else:
+                mcq_messages = build_mcq_messages(article_text, locked_words, num_questions=2)
+                endpoint = base_url_r or "OpenAI 官方端点"
+                st.caption(f"📡 调用：{model_r} @ {endpoint}")
+                with st.spinner("🔄 正在生成四选一阅读理解题（含高干扰项与解析）…"):
+                    try:
+                        raw_mcq = generate_mcq(api_key_r, base_url_r, model_r, mcq_messages)
+                    except openai.AuthenticationError as e:
+                        st.error(f"🔑 鉴权失败（HTTP 401）：服务商拒绝该 API Key。\n\n{e}")
+                        raw_mcq = ""
+                    except openai.APIConnectionError as e:
+                        st.error(f"🔌 无法连接 API（{endpoint}）：请检查 Base URL、网络或代理设置。\n\n{e}")
+                        raw_mcq = ""
+                    except openai.APIStatusError as e:
+                        st.error(f"API 调用失败（HTTP {getattr(e, 'status_code', '?')}）：{e}")
+                        raw_mcq = ""
+                    except Exception as e:
+                        st.error(f"出题失败（{type(e).__name__}）：{e}")
+                        raw_mcq = ""
+
+                if raw_mcq:
+                    mcq_list = parse_mcq_json(raw_mcq)
+                    if not mcq_list:
+                        st.error("⚠️ 大模型返回内容无法解析为有效题目 JSON，请重试。")
+                        with st.expander("🔎 查看原始返回内容", expanded=False):
+                            st.code(raw_mcq, language="json")
+                    else:
+                        st.session_state["mcq_questions"] = mcq_list
+                        st.session_state["mcq_submitted"] = False
+                        st.session_state["mcq_answers"] = {}
+                        st.success(f"✨ 成功生成 {len(mcq_list)} 道题目！请作答后提交查看解析。")
+
+    # —— 渲染交互式答题区 ——
+    mcq_list = st.session_state.get("mcq_questions")
+    if mcq_list:
+        for idx, q in enumerate(mcq_list):
+            st.markdown("---")
+            st.markdown(f"#### 第 {idx + 1} 题")
+            st.markdown(f"**{q['question']}**")
+            option_labels = [
+                f"{k}. {q['options'][k]}" for k in ("A", "B", "C", "D")
             ]
-        )
-        if st.button("提交答案"):
-            st.write("🎉 回答正确！考点解析：文章中提到‘因为公司要招聘新的职员，所以小明需要准备很多简历’。")
+            selected = st.radio(
+                f"选择你的答案（第 {idx + 1} 题）：",
+                option_labels,
+                key=f"mcq_radio_{idx}",
+                index=None,  # 不预选
+                label_visibility="collapsed",
+            )
+            # 记录用户选择
+            if selected:
+                st.session_state["mcq_answers"][idx] = selected[0]  # "A. ..." -> "A"
+
+        st.markdown("---")
+        submit_clicked = st.button("✅ 提交答案并查看解析", type="primary")
+
+        if submit_clicked:
+            st.session_state["mcq_submitted"] = True
+
+        if st.session_state.get("mcq_submitted"):
+            correct_count = 0
+            for idx, q in enumerate(mcq_list):
+                user_ans = st.session_state.get("mcq_answers", {}).get(idx)
+                correct_ans = q["answer"]
+                is_correct = user_ans == correct_ans
+                if is_correct:
+                    correct_count += 1
+
+                with st.container(border=True):
+                    if is_correct:
+                        st.success(f"✅ 第 {idx + 1} 题 回答正确！")
+                    else:
+                        st.error(f"❌ 第 {idx + 1} 题回答不正确。")
+                    st.markdown(
+                        f"- 你的答案：**{user_ans or '（未作答）'}**"
+                        f"  ｜  正确答案：**{correct_ans}**"
+                    )
+                    st.markdown(f"- **解析：** {q['explanation']}")
+                    st.markdown(
+                        f"  - **A.** {q['options']['A']}　"
+                        f"**B.** {q['options']['B']}　"
+                        f"**C.** {q['options']['C']}　"
+                        f"**D.** {q['options']['D']}"
+                    )
+
+            score_pct = round(correct_count / len(mcq_list) * 100)
+            st.markdown("---")
+            if score_pct == 100:
+                st.balloons()
+                st.success(f"🏆 全部正确！得分 {correct_count}/{len(mcq_list)}（{score_pct}%）")
+            else:
+                st.info(f"📊 得分 {correct_count}/{len(mcq_list)}（{score_pct}%），再接再厉！")
+    elif not gen_mcq_clicked:
+        st.info("👆 请先在左侧生成文章后，点击「一键出题」生成阅读理解题。")
