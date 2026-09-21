@@ -396,12 +396,46 @@ with col1:
                             stream_reading_text(api_key_r, base_url_r, model_r, messages)
                         )
                     except openai.AuthenticationError as e:
-                        st.error(f"鉴权失败：{e}（请检查 API Key 是否正确）")
+                        st.error(
+                            "🔑 鉴权失败：请检查 API Key 是否正确、是否对应所选服务商。\n\n"
+                            f"原始报错：{e}"
+                        )
                         text = ""
                     except openai.APIConnectionError as e:
-                        st.error(f"无法连接 API（{endpoint}）：{e}")
+                        st.error(
+                            f"🔌 无法连接 API（{endpoint}）：请检查 Base URL、网络或代理设置。\n\n"
+                            f"原始报错：{e}"
+                        )
+                        text = ""
+                    except openai.APIStatusError as e:
+                        code = getattr(e, "status_code", None) or 0
+                        msg = str(e)
+                        if code == 402 or "Insufficient Balance" in msg or "insufficient_quota" in msg:
+                            st.error(
+                                "💸 账户余额不足（HTTP 402 Insufficient Balance）：\n"
+                                "该服务商账户可用额度已用尽，请求被拒。\n\n"
+                                "解决办法（任选其一）：\n"
+                                "1. 前往对应服务商控制台充值（DeepSeek / SiliconFlow / OpenAI）；\n"
+                                "2. 切换到有免费额度的服务商——侧边栏选 **SiliconFlow (硅基流动)**，\n"
+                                "   模型填 `Qwen/Qwen2.5-7B-Instruct` 等免费模型即可。\n\n"
+                                f"原始报错：{msg}"
+                            )
+                        elif code == 429:
+                            st.error(
+                                "⏳ 请求过于频繁或触发限额（HTTP 429）：\n"
+                                "请稍候几秒再试，或降低生成频率 / 切换模型。\n\n"
+                                f"原始报错：{msg}"
+                            )
+                        elif code and 500 <= code < 600:
+                            st.error(
+                                f"⚙️ 服务端临时故障（HTTP {code}）：\n{msg}\n"
+                                "稍后重试即可；若持续出现请更换服务商或模型。"
+                            )
+                        else:
+                            st.error(f"API 调用失败（HTTP {code}）：{msg}")
                         text = ""
                     except openai.APIError as e:
+                        # 兜底：非 HTTP 状态类的 openai 异常（如请求构造错误）
                         st.error(f"API 调用失败：{e}")
                         text = ""
                     except Exception as e:  # 兜底：其它服务商返回的非标准异常
