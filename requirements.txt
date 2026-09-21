@@ -1,3 +1,11 @@
+# HSK 4 级受控分级阅读与测评生成器 — Python 依赖
+# 安装方式：pip install -r requirements.txt
+
+# Web 应用框架（UI 渲染、流式输出、session_state 状态管理）
 streamlit>=1.28
+
+# 数据处理（CSV 词汇表读取、编码探测、随机抽样）
 pandas>=2.0
+
+# OpenAI 兼容 API 客户端（支持 OpenAI / DeepSeek / SiliconFlow 等）
 openai>=1.0.0
