@@ -177,19 +177,14 @@ def render_locked_words(words_df: pd.DataFrame, topic_label: str) -> None:
 # ============================================================================
 
 # 服务商预设（均为 OpenAI 兼容端点，base_url / model 可在侧边栏手动覆盖）
-# ⚠️ 注意：SiliconFlow 有两个独立站点，用户体系 / Key / 端点完全不互通：
-#   - 国际版 (Global):   base_url = https://api.siliconflow.com/v1   控制台 = https://cloud.siliconflow.com/me/account/ak
-#   - 国内版 (China):    base_url = https://api.siliconflow.cn/v1    控制台 = https://cloud.siliconflow.cn/account/ak
+# ⚠️ SiliconFlow 国际站唯一端点：https://api.siliconflow.com/v1
+#    控制台：https://cloud.siliconflow.com/me/account/ak
 LLM_PRESETS = {
-    "DeepSeek (深度求索)": {"base_url": "https://api.deepseek.com", "model": "deepseek-chat"},
-    "SiliconFlow 国际版 (siliconflow.com)": {
+    "SiliconFlow (siliconflow.com · 国际站)": {
         "base_url": "https://api.siliconflow.com/v1",
         "model": "deepseek-ai/DeepSeek-V3",
     },
-    "SiliconFlow 国内版 (硅基流动 .cn)": {
-        "base_url": "https://api.siliconflow.cn/v1",
-        "model": "deepseek-ai/DeepSeek-V3",
-    },
+    "DeepSeek (深度求索)": {"base_url": "https://api.deepseek.com", "model": "deepseek-chat"},
     "自定义 (Custom)": {"base_url": "", "model": ""},
 }
 
@@ -245,14 +240,10 @@ def _resolve_cloud_config():
     读取 ``st.secrets["DEFAULT_PROVIDER"]``（默认 ``"SiliconFlow"``）确定默认服务商，
     再匹配对应的专用 Key，返回一键配置好的 (api_key, base_url, model, provider_label)。
 
-    支持识别 SiliconFlow 国际版 / 国内版：
-    - ``DEFAULT_PROVIDER`` 包含 ``国际版`` / ``global`` / ``.com`` → 使用国际版
+    - SiliconFlow（只要含 ``silicon`` / ``硅基`` 任一关键字，均走国际站唯一端点）
       ``https://api.siliconflow.com/v1``（控制台：https://cloud.siliconflow.com/me/account/ak）
-    - 其他含 ``SiliconFlow`` / ``硅基`` → 默认为国内版
-      ``https://api.siliconflow.cn/v1``（控制台：https://cloud.siliconflow.cn/account/ak）
-    - 也可单独用 ``SILICONFLOW_BASE_URL`` / ``SILICONFLOW_MODEL`` 覆盖默认端点/模型
-
-    - ``DeepSeek``：需配置 ``DEEPSEEK_API_KEY``
+      也可单独用 ``SILICONFLOW_BASE_URL`` / ``SILICONFLOW_MODEL`` 覆盖默认端点/模型。
+    - DeepSeek：含 ``deep`` / ``深度`` 任一关键字，需配置 ``DEEPSEEK_API_KEY``
 
     Returns:
         (api_key, base_url, model, provider_label)，若云端未配置则返回 ``(None, None, None, None)``
@@ -262,24 +253,11 @@ def _resolve_cloud_config():
     if "silicon" in p_lower or "硅基" in p_lower:
         key = _secret("SILICONFLOW_API_KEY")
         if key:
-            # 显式国际版：DEFAULT_PROVIDER 包含 global / .com / 国际版 任一关键字
-            if (
-                ".com" in p_lower
-                or "global" in p_lower
-                or "国际" in str(default_provider)
-            ):
-                base_url = (
-                    _secret("SILICONFLOW_BASE_URL")
-                    or "https://api.siliconflow.com/v1"
-                )
-                label = "SiliconFlow 国际版 (siliconflow.com)"
-            else:
-                base_url = (
-                    _secret("SILICONFLOW_BASE_URL")
-                    or "https://api.siliconflow.cn/v1"
-                )
-                label = "SiliconFlow 国内版 (硅基流动 .cn)"
+            base_url = (
+                _secret("SILICONFLOW_BASE_URL") or "https://api.siliconflow.com/v1"
+            )
             model = _secret("SILICONFLOW_MODEL") or "deepseek-ai/DeepSeek-V3"
+            label = "SiliconFlow (siliconflow.com · 国际站)"
             return (key, base_url, model, label)
     elif "deep" in p_lower or "深度" in p_lower:
         key = _secret("DEEPSEEK_API_KEY")

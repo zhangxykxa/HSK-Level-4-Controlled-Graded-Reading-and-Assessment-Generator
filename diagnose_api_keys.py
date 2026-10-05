@@ -69,51 +69,40 @@ def test_deepseek(api_key: str):
         print(f"  ⚠️  请求异常：{e}")
 
 
-def test_siliconflow(api_key: str, site: str = "cn"):
-    """测试 SiliconFlow Key。
+def test_siliconflow(api_key: str):
+    """测试 SiliconFlow 国际站 Key。
 
-    Args:
-        site: "cn" = 国内版 (siliconflow.cn)
-              "com" = 国际版 (siliconflow.com)
-              "both" = 两个版本都测试
+    唯一站点：控制台 https://cloud.siliconflow.com/me/account/ak
+              API Base URL = https://api.siliconflow.com/v1
     """
-    targets = []
-    if site in ("cn", "both"):
-        targets.append(("国内版 (siliconflow.cn)", "https://api.siliconflow.cn/v1"))
-    if site in ("com", "both"):
-        targets.append(("国际版 (siliconflow.com)", "https://api.siliconflow.com/v1"))
+    label = "国际站 (siliconflow.com)"
+    base = "https://api.siliconflow.com/v1"
+    print(f"\n=== 测试 SiliconFlow {label} API ===")
+    print(f"  端点：{base}")
+    headers = {"Authorization": f"Bearer {api_key.strip()}"}
 
-    for label, base in targets:
-        print(f"\n=== 测试 SiliconFlow {label} API ===")
-        print(f"  端点：{base}")
-        headers = {"Authorization": f"Bearer {api_key.strip()}"}
-
-        try:
-            r = httpx.get(f"{base}/models", headers=headers, timeout=15)
-            code = r.status_code
-            print(f"  查询模型列表：HTTP {code}")
-            if code == 200:
-                data = r.json()
-                models = [m["id"] for m in data.get("data", [])]
-                print(
-                    f"  ✅ Key 有效！可用模型：{', '.join(models[:8])}{'...' if len(models) > 8 else ''}"
-                )
-            elif code == 401:
-                body = r.text[:500]
-                print(f"  ❌ 鉴权失败 (401)：{body}")
-                print("     常见原因：")
-                print(f"     1. 当前站点 [{label}] 不接受这把 Key（站点间 Key 不互通！）")
-                print(f"        → 若控制台在 cloud.siliconflow.com，请用「国际版」；")
-                print(f"        → 若控制台在 cloud.siliconflow.cn，请用「国内版」。")
-                print("     2. Key 已被删除 / 复制不完整 / 被修改")
-                if "cn" in label:
-                    print("     3. 国内版需要完成国内手机号实名后 Key 才生效")
-                else:
-                    print("     3. 国际版可能需要完成邮箱验证 / 手机号验证")
-            else:
-                print(f"  ⚠️  其他错误：HTTP {code} -> {r.text[:500]}")
-        except Exception as e:
-            print(f"  ⚠️  请求异常：{e}")
+    try:
+        r = httpx.get(f"{base}/models", headers=headers, timeout=15)
+        code = r.status_code
+        print(f"  查询模型列表：HTTP {code}")
+        if code == 200:
+            data = r.json()
+            models = [m["id"] for m in data.get("data", [])]
+            print(
+                f"  ✅ Key 有效！可用模型：{', '.join(models[:8])}{'...' if len(models) > 8 else ''}"
+            )
+        elif code == 401:
+            body = r.text[:500]
+            print(f"  ❌ 鉴权失败 (401)：{body}")
+            print("     常见原因：")
+            print("     1. Key 不是从国际站控制台获取的（Key 仅在对应站点有效）")
+            print("        → 请确认：控制台必须是 cloud.siliconflow.com（国际站）")
+            print("     2. Key 已被删除 / 复制不完整 / 被修改")
+            print("     3. 账号未完成邮箱验证 / 手机号验证")
+        else:
+            print(f"  ⚠️  其他错误：HTTP {code} -> {r.text[:500]}")
+    except Exception as e:
+        print(f"  ⚠️  请求异常：{e}")
 
 
 def main():
@@ -132,25 +121,13 @@ def main():
     if is_placeholder(siliconflow_key):
         print("\n⚠️  SILICONFLOW_API_KEY 尚未填写，跳过 SiliconFlow 测试。")
     else:
-        # 根据 DEFAULT_PROVIDER 或显式 SILICONFLOW_BASE_URL 推断站点
-        sf_base_url = cfg.get("SILICONFLOW_BASE_URL") or ""
-        site = "cn"
-        if ".com" in sf_base_url.lower():
-            site = "com"
-        elif "国际" in str(default_provider) or ".com" in str(default_provider).lower() \
-                or "global" in str(default_provider).lower():
-            site = "com"
-        # 默认两个版本都测试一次，帮助用户确认 Key 属于哪个站点
-        test_siliconflow(siliconflow_key, site="both")
+        # 仅测国际站 siliconflow.com
+        test_siliconflow(siliconflow_key)
 
     print("\n=== 下一步建议 ===")
     print("  Key 验证通过后，启动应用：")
     print("    streamlit run app.py")
     print("  侧边栏将自动显示「✅ 默认云端服务已就绪」，无需再手动填 Key。")
-    print("\n  ⚠️ 如果 SiliconFlow 仅某一个站点 (cn/com) 通过，")
-    print("     请把 DEFAULT_PROVIDER 设置为：")
-    print("      - 国内版通过  → DEFAULT_PROVIDER = \"SiliconFlow\"")
-    print("      - 国际版通过  → DEFAULT_PROVIDER = \"SiliconFlow 国际版\"")
 
 
 if __name__ == "__main__":
