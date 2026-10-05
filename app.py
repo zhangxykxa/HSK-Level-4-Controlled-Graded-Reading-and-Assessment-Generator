@@ -9,6 +9,19 @@ import openai
 # 1. 页面基本配置
 st.set_page_config(page_title="HSK 4 Graded Material Generator", layout="wide")
 
+# 彻底隐藏右上角 GitHub 信息与 Streamlit 开发痕迹（CSS 注入）
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    div[data-testid="stDecoration"] {display: none;}
+    div[data-testid="stStatusWidget"] {display: none;}
+    .viewerBadge_container__17vsn {display: none !important;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 st.title("📚 HSK 4 级受控分级阅读与测评生成器")
 st.subheader("Curriculum-Adaptive Reading & Exercise Generator (HSK 2.0 vs 3.0)")
 st.write("---")
@@ -167,11 +180,10 @@ def render_locked_words(words_df: pd.DataFrame, topic_label: str) -> None:
 
 # 服务商预设（均为 OpenAI 兼容端点，base_url / model 可在侧边栏手动覆盖）
 LLM_PRESETS = {
-    "OpenAI (官方)": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
     "DeepSeek (深度求索)": {"base_url": "https://api.deepseek.com", "model": "deepseek-chat"},
     "SiliconFlow (硅基流动)": {
         "base_url": "https://api.siliconflow.cn/v1",
-        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "model": "deepseek-ai/DeepSeek-V3",
     },
     "自定义 (Custom)": {"base_url": "", "model": ""},
 }
@@ -210,17 +222,47 @@ def _clean_base_url(v):
     return s.rstrip("/") or None
 
 
+def _has_cloud_api_key() -> bool:
+    """检测云端 st.secrets 中是否已配置有效的 API Key。
+
+    检查 ``DEFAULT_API_KEY`` / ``DEEPSEEK_API_KEY`` / ``SILICONFLOW_API_KEY``
+    / ``OPENAI_API_KEY`` 任一键是否存在非空值。
+    """
+    for k in ("DEFAULT_API_KEY", "DEEPSEEK_API_KEY", "SILICONFLOW_API_KEY", "OPENAI_API_KEY"):
+        if _secret(k):
+            return True
+    return False
+
+
 def _resolve_api_config(api_key_input, base_url_input, model_input):
-    """按优先级解析 API 配置：侧边栏输入 > 环境变量 > st.secrets。
+    """按优先级解析 API 配置：侧边栏输入 > 云端 st.secrets > 环境变量。
+
+    云端 secrets 支持以下键名（按优先级依次尝试）：
+    - ``DEFAULT_API_KEY``（通用默认 Key）
+    - ``DEEPSEEK_API_KEY``（DeepSeek 专用）
+    - ``SILICONFLOW_API_KEY``（SiliconFlow 专用）
+    - ``OPENAI_API_KEY``（向后兼容）
 
     自动规整：Key 去空白/剥 ``Bearer `` 前缀、base_url 去末尾斜杠、
     model 去空白。这类粘贴瑕疵常导致 401 'Token is invalid'。
 
     Returns:
-        (api_key, base_url, model)，缺失项为 ``None``。其中 ``base_url`` 为
-        ``None`` 时由 ``openai`` 库回退到 OpenAI 官方端点。
+        (api_key, base_url, model)，缺失项为 ``None``。
     """
-    raw_key = api_key_input or os.environ.get("OPENAI_API_KEY") or _secret("OPENAI_API_KEY")
+    # 云端 secrets Key 候选列表（按优先级）
+    cloud_key_candidates = (
+        "DEFAULT_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "SILICONFLOW_API_KEY",
+        "OPENAI_API_KEY",
+    )
+    cloud_key = None
+    for k in cloud_key_candidates:
+        cloud_key = _secret(k)
+        if cloud_key:
+            break
+
+    raw_key = api_key_input or cloud_key or os.environ.get("OPENAI_API_KEY")
     raw_url = base_url_input or os.environ.get("OPENAI_BASE_URL") or _secret("OPENAI_BASE_URL")
     raw_model = model_input or os.environ.get("OPENAI_MODEL") or _secret("OPENAI_MODEL")
     return _clean_token(raw_key), _clean_base_url(raw_url), _clean_token(raw_model)
@@ -274,8 +316,8 @@ def build_generation_messages(
 def stream_reading_text(api_key, base_url, model, messages, temperature=0.7):
     """调用 OpenAI 兼容接口，以流式生成器逐段 yield 文本片段。
 
-    供 ``st.write_stream`` 消费，实现逐字实时渲染。``base_url`` 为 ``None`` 时
-    使用 OpenAI 官方端点；填入 DeepSeek / SiliconFlow 等兼容端点即可切换服务商。
+    供 ``st.write_stream`` 消费，实现逐字实时渲染。填入 DeepSeek / SiliconFlow
+    等兼容端点即可切换服务商。
     """
     client = openai.OpenAI(api_key=api_key, base_url=base_url or None)
     stream = client.chat.completions.create(
@@ -440,7 +482,7 @@ target_vocab_count = st.sidebar.slider("4. 融入核心词数量 (Target Vocabul
 if st.sidebar.button("🔄 重新随机锁定 (Reshuffle)", use_container_width=True):
     st.session_state["lock_seed"] = st.session_state.get("lock_seed", 0) + 1
 
-# --- 大模型 API 配置（侧边栏输入优先，回退 env / st.secrets）---
+# --- 大模型 API 配置（云端 secrets 优先，侧边栏手动输入兜底）---
 st.sidebar.markdown("### 🤖 大模型 API 配置")
 
 # 初始化预设字段，使服务商切换时自动填充 base_url / model
@@ -464,26 +506,33 @@ provider = st.sidebar.selectbox(
     list(LLM_PRESETS.keys()),
     key="cfg_provider",
     on_change=_apply_provider_preset,
-    help="选择 OpenAI / DeepSeek / SiliconFlow 等兼容服务商；下方字段可手动覆盖",
+    help="选择 DeepSeek / SiliconFlow 等兼容服务商，或自定义端点",
 )
 
-# 自动读取 API Key：优先使用 Streamlit 官方加密 secrets，其次允许用户手动在侧边栏覆盖输入
-if "OPENAI_API_KEY" in st.secrets:
-    api_key = st.secrets["OPENAI_API_KEY"]
-else:
-    api_key = st.sidebar.text_input("🔑 请输入您的 API Key (若云端未配置):", type="password")
+# 优先读取云端 Secrets，实现专家免填 Key 体验
+cloud_key_ready = _has_cloud_api_key()
 
-# 如果在 secrets 中成功读取，可以在侧边栏给老师一个温馨提示
-if "OPENAI_API_KEY" in st.secrets:
-    st.sidebar.success("✅ 云端 API 服务已就绪，您无需填写 Key，可直接开始生成！")
+if cloud_key_ready:
+    st.sidebar.success("✅ 云端 API 已就绪，教师无需填写 Key，可直接生成！")
+    # 云端已配置 Key：手动输入框放入默认折叠的高级设置中
+    with st.sidebar.expander("🔑 高级设置：使用自定义 API Key", expanded=False):
+        api_key = st.text_input(
+            "覆盖云端 Key（留空则使用云端配置）:", type="password", key="cfg_api_key",
+        )
+else:
+    st.sidebar.warning("⚠️ 云端未检测到 API Key，请在下方手动输入。")
+    api_key = st.sidebar.text_input(
+        "🔑 请输入您的 API Key:", type="password", key="cfg_api_key",
+        help="将部署到云端后可在 .streamlit/secrets.toml 中配置免填体验",
+    )
 
 base_url = st.sidebar.text_input(
-    "🌐 Base URL (OpenAI 兼容)", key="cfg_base_url",
+    "🌐 Base URL", key="cfg_base_url",
     help="如 https://api.deepseek.com 或 https://api.siliconflow.cn/v1",
 )
 model = st.sidebar.text_input(
     "🏷️ 模型名 (Model)", key="cfg_model",
-    help="如 gpt-4o-mini / deepseek-chat / Qwen/Qwen2.5-7B-Instruct",
+    help="如 deepseek-chat / deepseek-ai/DeepSeek-V3",
 )
 
 st.sidebar.write("---")
@@ -532,16 +581,16 @@ with col1:
                 api_key_r, base_url_r, model_r = _resolve_api_config(api_key, base_url, model)
                 if not api_key_r:
                     st.error(
-                        "未获取到 API Key：请在侧边栏填写，或在环境变量 / st.secrets 中"
-                        "设置 OPENAI_API_KEY。"
+                        "未获取到 API Key：请在侧边栏填写，或在云端 st.secrets 中"
+                        "配置 DEFAULT_API_KEY / DEEPSEEK_API_KEY / SILICONFLOW_API_KEY。"
                     )
                 elif not model_r:
-                    st.error("未指定模型名：请在侧边栏填写模型名（如 gpt-4o-mini / deepseek-chat）。")
+                    st.error("未指定模型名：请在侧边栏填写模型名（如 deepseek-chat / deepseek-ai/DeepSeek-V3）。")
                 else:
                     messages = build_generation_messages(
                         locked_words, theme_choice, syllabus_version, char_limit
                     )
-                    endpoint = base_url_r or "OpenAI 官方端点"
+                    endpoint = base_url_r or "(未配置 Base URL)"
                     st.caption(f"📡 调用：{model_r} @ {endpoint}")
                     try:
                         text = st.write_stream(
@@ -573,9 +622,9 @@ with col1:
                                 "💸 账户余额不足（HTTP 402 Insufficient Balance）：\n"
                                 "该服务商账户可用额度已用尽，请求被拒。\n\n"
                                 "解决办法（任选其一）：\n"
-                                "1. 前往对应服务商控制台充值（DeepSeek / SiliconFlow / OpenAI）；\n"
+                                "1. 前往对应服务商控制台充值（DeepSeek / SiliconFlow）；\n"
                                 "2. 切换到有免费额度的服务商——侧边栏选 **SiliconFlow (硅基流动)**，\n"
-                                "   模型填 `Qwen/Qwen2.5-7B-Instruct` 等免费模型即可。\n\n"
+                                "   模型填 `deepseek-ai/DeepSeek-V3` 等免费模型即可。\n\n"
                                 f"原始报错：{msg}"
                             )
                         elif code == 429:
@@ -653,12 +702,12 @@ with col2:
         else:
             api_key_r, base_url_r, model_r = _resolve_api_config(api_key, base_url, model)
             if not api_key_r:
-                st.error("未获取到 API Key：请在侧边栏填写，或在环境变量 / st.secrets 中设置 OPENAI_API_KEY。")
+                st.error("未获取到 API Key：请在侧边栏填写，或在云端 st.secrets 中配置 DEFAULT_API_KEY / DEEPSEEK_API_KEY / SILICONFLOW_API_KEY。")
             elif not model_r:
-                st.error("未指定模型名：请在侧边栏填写模型名（如 gpt-4o-mini / deepseek-chat）。")
+                st.error("未指定模型名：请在侧边栏填写模型名（如 deepseek-chat / deepseek-ai/DeepSeek-V3）。")
             else:
                 mcq_messages = build_mcq_messages(article_text, locked_words, num_questions=2)
-                endpoint = base_url_r or "OpenAI 官方端点"
+                endpoint = base_url_r or "(未配置 Base URL)"
                 st.caption(f"📡 调用：{model_r} @ {endpoint}")
                 with st.spinner("🔄 正在生成四选一阅读理解题（含高干扰项与解析）…"):
                     try:
