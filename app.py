@@ -225,23 +225,56 @@ def _clean_base_url(v):
 def _has_cloud_api_key() -> bool:
     """检测云端 st.secrets 中是否已配置有效的 API Key。
 
-    检查 ``DEFAULT_API_KEY`` / ``DEEPSEEK_API_KEY`` / ``SILICONFLOW_API_KEY``
-    / ``OPENAI_API_KEY`` 任一键是否存在非空值。
+    检查 ``DEEPSEEK_API_KEY`` / ``SILICONFLOW_API_KEY``
+    / ``DEFAULT_API_KEY`` / ``OPENAI_API_KEY`` 任一键是否存在非空值。
     """
-    for k in ("DEFAULT_API_KEY", "DEEPSEEK_API_KEY", "SILICONFLOW_API_KEY", "OPENAI_API_KEY"):
+    for k in ("DEEPSEEK_API_KEY", "SILICONFLOW_API_KEY", "DEFAULT_API_KEY", "OPENAI_API_KEY"):
         if _secret(k):
             return True
     return False
 
 
-def _resolve_api_config(api_key_input, base_url_input, model_input):
-    """按优先级解析 API 配置：侧边栏输入 > 云端 st.secrets > 环境变量。
+def _resolve_cloud_config():
+    """根据云端 ``DEFAULT_PROVIDER`` 自动解析完整 API 配置。
 
-    云端 secrets 支持以下键名（按优先级依次尝试）：
-    - ``DEFAULT_API_KEY``（通用默认 Key）
-    - ``DEEPSEEK_API_KEY``（DeepSeek 专用）
-    - ``SILICONFLOW_API_KEY``（SiliconFlow 专用）
-    - ``OPENAI_API_KEY``（向后兼容）
+    读取 ``st.secrets["DEFAULT_PROVIDER"]``（默认 ``"SiliconFlow"``）确定默认服务商，
+    再匹配对应的专用 Key，返回一键配置好的 (api_key, base_url, model, provider_label)。
+
+    - ``SiliconFlow``：需配置 ``SILICONFLOW_API_KEY``
+    - ``DeepSeek``：需配置 ``DEEPSEEK_API_KEY``
+
+    Returns:
+        (api_key, base_url, model, provider_label)，若云端未配置则返回 ``(None, None, None, None)``
+    """
+    default_provider = _secret("DEFAULT_PROVIDER") or "SiliconFlow"
+    # 归一化服务商名称（容忍大小写 / 简写）
+    p_lower = str(default_provider).strip().lower()
+    if "silicon" in p_lower or "硅基" in p_lower:
+        key = _secret("SILICONFLOW_API_KEY")
+        if key:
+            return (
+                key,
+                "https://api.siliconflow.cn/v1",
+                "deepseek-ai/DeepSeek-V3",
+                "SiliconFlow (硅基流动)",
+            )
+    elif "deep" in p_lower or "深度" in p_lower:
+        key = _secret("DEEPSEEK_API_KEY")
+        if key:
+            return (
+                key,
+                "https://api.deepseek.com",
+                "deepseek-chat",
+                "DeepSeek (深度求索)",
+            )
+    return None, None, None, None
+
+
+def _resolve_api_config(api_key_input, base_url_input, model_input):
+    """按优先级解析 API 配置：侧边栏手动输入 > 云端 st.secrets > 环境变量。
+
+    云端配置由 :func:`_resolve_cloud_config` 根据 ``DEFAULT_PROVIDER``
+    自动匹配服务商专用 Key 与对应 base_url / model。
 
     自动规整：Key 去空白/剥 ``Bearer `` 前缀、base_url 去末尾斜杠、
     model 去空白。这类粘贴瑕疵常导致 401 'Token is invalid'。
@@ -249,22 +282,11 @@ def _resolve_api_config(api_key_input, base_url_input, model_input):
     Returns:
         (api_key, base_url, model)，缺失项为 ``None``。
     """
-    # 云端 secrets Key 候选列表（按优先级）
-    cloud_key_candidates = (
-        "DEFAULT_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "SILICONFLOW_API_KEY",
-        "OPENAI_API_KEY",
-    )
-    cloud_key = None
-    for k in cloud_key_candidates:
-        cloud_key = _secret(k)
-        if cloud_key:
-            break
+    cloud_key, cloud_url, cloud_model, _ = _resolve_cloud_config()
 
     raw_key = api_key_input or cloud_key or os.environ.get("OPENAI_API_KEY")
-    raw_url = base_url_input or os.environ.get("OPENAI_BASE_URL") or _secret("OPENAI_BASE_URL")
-    raw_model = model_input or os.environ.get("OPENAI_MODEL") or _secret("OPENAI_MODEL")
+    raw_url = base_url_input or cloud_url or os.environ.get("OPENAI_BASE_URL") or _secret("OPENAI_BASE_URL")
+    raw_model = model_input or cloud_model or os.environ.get("OPENAI_MODEL") or _secret("OPENAI_MODEL")
     return _clean_token(raw_key), _clean_base_url(raw_url), _clean_token(raw_model)
 
 
@@ -485,13 +507,25 @@ if st.sidebar.button("🔄 重新随机锁定 (Reshuffle)", use_container_width=
 # --- 大模型 API 配置（云端 secrets 优先，侧边栏手动输入兜底）---
 st.sidebar.markdown("### 🤖 大模型 API 配置")
 
-# 初始化预设字段，使服务商切换时自动填充 base_url / model
+# 首次加载：根据云端 DEFAULT_PROVIDER 自动设置服务商 / base_url / model
+_cloud_key, _cloud_url, _cloud_model, _cloud_label = _resolve_cloud_config()
+_cloud_ready = _cloud_key is not None
+
 if "cfg_provider" not in st.session_state:
-    st.session_state["cfg_provider"] = list(LLM_PRESETS.keys())[0]
+    if _cloud_ready and _cloud_label in LLM_PRESETS:
+        st.session_state["cfg_provider"] = _cloud_label
+    else:
+        st.session_state["cfg_provider"] = list(LLM_PRESETS.keys())[0]
 if "cfg_base_url" not in st.session_state:
     st.session_state["cfg_base_url"] = LLM_PRESETS[st.session_state["cfg_provider"]]["base_url"]
 if "cfg_model" not in st.session_state:
     st.session_state["cfg_model"] = LLM_PRESETS[st.session_state["cfg_provider"]]["model"]
+# 首次加载且云端就绪：用云端配置覆盖 session_state 中的 base_url / model
+if "cloud_initialized" not in st.session_state:
+    if _cloud_ready:
+        st.session_state["cfg_base_url"] = _cloud_url
+        st.session_state["cfg_model"] = _cloud_model
+    st.session_state["cloud_initialized"] = True
 
 
 def _apply_provider_preset():
@@ -509,11 +543,12 @@ provider = st.sidebar.selectbox(
     help="选择 DeepSeek / SiliconFlow 等兼容服务商，或自定义端点",
 )
 
-# 优先读取云端 Secrets，实现专家免填 Key 体验
-cloud_key_ready = _has_cloud_api_key()
-
-if cloud_key_ready:
-    st.sidebar.success("✅ 云端 API 已就绪，教师无需填写 Key，可直接生成！")
+# 云端服务就绪提示：亮起绿色，显示具体服务商名称
+if _cloud_ready:
+    st.sidebar.success(
+        f"✅ 默认 {_cloud_label} 云端服务已就绪！\n"
+        "您无需输入任何 API 密钥即可一键生成！"
+    )
     # 云端已配置 Key：手动输入框放入默认折叠的高级设置中
     with st.sidebar.expander("🔑 高级设置：使用自定义 API Key", expanded=False):
         api_key = st.text_input(
