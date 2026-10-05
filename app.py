@@ -466,10 +466,17 @@ provider = st.sidebar.selectbox(
     on_change=_apply_provider_preset,
     help="选择 OpenAI / DeepSeek / SiliconFlow 等兼容服务商；下方字段可手动覆盖",
 )
-api_key = st.sidebar.text_input(
-    "🔑 API Key", type="password", key="cfg_api_key",
-    help="留空则依次读取环境变量 OPENAI_API_KEY / st.secrets",
-)
+
+# 自动读取 API Key：优先使用 Streamlit 官方加密 secrets，其次允许用户手动在侧边栏覆盖输入
+if "OPENAI_API_KEY" in st.secrets:
+    api_key = st.secrets["OPENAI_API_KEY"]
+else:
+    api_key = st.sidebar.text_input("🔑 请输入您的 API Key (若云端未配置):", type="password")
+
+# 如果在 secrets 中成功读取，可以在侧边栏给老师一个温馨提示
+if "OPENAI_API_KEY" in st.secrets:
+    st.sidebar.success("✅ 云端 API 服务已就绪，您无需填写 Key，可直接开始生成！")
+
 base_url = st.sidebar.text_input(
     "🌐 Base URL (OpenAI 兼容)", key="cfg_base_url",
     help="如 https://api.deepseek.com 或 https://api.siliconflow.cn/v1",
