@@ -189,6 +189,123 @@ LLM_PRESETS = {
 }
 
 
+def _fmt_key_tail(api_key: str, n: int = 4) -> str:
+    """返回 API Key 的末 ``n`` 位用于展示比对（安全：不显示完整 Key）。"""
+    s = str(api_key or "").strip()
+    return s[-n:] if len(s) >= n else s or "(空)"
+
+
+def _build_auth_error_msg(e, api_key_r: str, endpoint: str, model_r: str) -> str:
+    """统一 401 鉴权失败提示：含 Key 末 4 位、端点、控制台直达链接，方便快速核对。"""
+    msg = str(e)
+    key_tail = _fmt_key_tail(api_key_r)
+    endpoint_lower = str(endpoint or "").lower()
+
+    # 根据端点推断控制台 URL
+    if "siliconflow.com" in endpoint_lower:
+        console = "https://cloud.siliconflow.com/me/account/ak"
+        provider_note = (
+            "1. 👉 当前端点是 **SiliconFlow 国际站 (siliconflow.com)**，\n"
+            "   Key 必须从 👉 **https://cloud.siliconflow.com/me/account/ak** 获取；\n"
+            "   若你是用国内站 siliconflow.cn 生成的 Key 则必然 401（两站用户体系 100% 独立！）。\n"
+            "2. 复制时是否漏了字符？请点控制台「📋 复制」按钮，不要手动拖选。\n"
+            "3. 该 Key 是否已在控制台被删除？\n"
+            "4. 国际站账号是否已完成邮箱验证 / 手机号验证？"
+        )
+    elif "siliconflow.cn" in endpoint_lower:
+        console = "https://cloud.siliconflow.cn/account/ak"
+        provider_note = (
+            "1. 👉 当前端点是 SiliconFlow 国内站 (siliconflow.cn)，\n"
+            "   Key 必须从 👉 **https://cloud.siliconflow.cn/account/ak** 获取；\n"
+            "   国际站 Key 用在这里也会 401（两站完全独立！）。\n"
+            "2. 国内版需要完成**国内手机号实名**后 Key 才生效。\n"
+            "3. 点「📋 复制」完整 Key，不要手动拖选字符。"
+        )
+    elif "deepseek.com" in endpoint_lower or "api.deepseek" in endpoint_lower:
+        console = "https://platform.deepseek.com/api_keys"
+        provider_note = (
+            "1. 👉 当前端点是 **DeepSeek (deepseek.com)**，\n"
+            "   Key 必须从 👉 **https://platform.deepseek.com/api_keys** 获取；\n"
+            "   把 SiliconFlow / OpenAI 的 Key 填到这里必然 401。\n"
+            "2. 复制时是否漏了字符？请点控制台「复制」按钮。\n"
+            "3. 该 Key 是否已在控制台被删除？新生成一把后立即复制试试。"
+        )
+    else:
+        console = "(未知自定义端点，请参考该服务商文档)"
+        provider_note = (
+            "1. Key 是否与当前自定义端点的服务商相匹配？\n"
+            "2. Key 是否已过期 / 删除 / 复制不完整？"
+        )
+
+    # 401 提示：如果官方错误信息已经有 ****abcd，替换成真实末 4 位方便核对
+    import re as _re
+
+    masked_pattern = _re.compile(r"\*{2,}([A-Za-z0-9]{3,6})")
+    msg_show = masked_pattern.sub(lambda m: f"****{key_tail}", msg)
+
+    return (
+        f"🔑 鉴权失败（HTTP 401）：服务商拒绝该 API Key。\n\n"
+        f"🔍 诊断信息：\n"
+        f"  • 实际使用的 Key 末 4 位：`{key_tail}`\n"
+        f"  • 模型：`{model_r}`\n"
+        f"  • 端点：`{endpoint}`\n"
+        f"  • 对应控制台：{console}\n\n"
+        "排查清单：\n"
+        f"{provider_note}\n\n"
+        "👉 【快速核对方法】：打开上面的控制台链接，对比你刚刚新建的那把 Key 的「末 4 位」，\n"
+        f"   必须和这里显示的 `{key_tail}` 完全一致，不一致就是「保存错了 / 复制了旧 Key」。\n\n"
+        f"原始报错：{msg_show}"
+    )
+
+
+def _build_balance_error_msg(e, endpoint: str, model_r: str) -> str:
+    """统一 402 余额不足提示：区分服务商，不再让用户切到同一服务商自相矛盾。"""
+    msg = str(e)
+    endpoint_lower = str(endpoint or "").lower()
+
+    if "siliconflow.com" in endpoint_lower or "siliconflow.cn" in endpoint_lower:
+        sf_site = "国际站 siliconflow.com" if "siliconflow.com" in endpoint_lower else "国内站 siliconflow.cn"
+        balance_url = (
+            "https://cloud.siliconflow.com/me/wallet"
+            if "siliconflow.com" in endpoint_lower
+            else "https://cloud.siliconflow.cn/usercenter/wallet"
+        )
+        return (
+            f"💸 账户余额不足（HTTP 402）：SiliconFlow {sf_site} 账户可用额度已用尽，请求被拒。\n\n"
+            f"🔍 诊断信息：\n"
+            f"  • 模型：`{model_r}`\n"
+            f"  • 端点：`{endpoint}`\n"
+            f"  • 余额 / 钱包：{balance_url}\n\n"
+            "解决办法（任选其一）：\n"
+            "1. 💰 充值：打开上面的钱包链接进行充值；\n"
+            "2. 🔄 切换服务商：侧边栏选择「DeepSeek (深度求索)」并确保已配置有效的 DeepSeek Key\n"
+            "   （DeepSeek 控制台：https://platform.deepseek.com/api_keys）；\n"
+            "3. 🎁  SiliconFlow 新用户可关注官网是否有免费礼包 / 活动，可先完成实名获取赠送额度。\n\n"
+            f"原始报错：{msg}"
+        )
+
+    if "deepseek.com" in endpoint_lower or "api.deepseek" in endpoint_lower:
+        return (
+            f"💸 账户余额不足（HTTP 402）：DeepSeek 账户可用额度已用尽，请求被拒。\n\n"
+            f"🔍 诊断信息：\n"
+            f"  • 模型：`{model_r}`\n"
+            f"  • 端点：`{endpoint}`\n"
+            "  • 充值链接：https://platform.deepseek.com/billing\n\n"
+            "解决办法（任选其一）：\n"
+            "1. 💰 充值：打开上面的充值链接；\n"
+            "2. 🔄 切换服务商：侧边栏选择「SiliconFlow (siliconflow.com · 国际站)」，\n"
+            "   该站有免费试用额度（控制台：https://cloud.siliconflow.com/me/account/ak）。\n\n"
+            f"原始报错：{msg}"
+        )
+
+    return (
+        f"💸 账户余额不足（HTTP 402）：当前服务商账户可用额度已用尽，请求被拒。\n\n"
+        f"🔍 诊断信息：\n"
+        f"  • 模型：`{model_r}`\n"
+        f"  • 端点：`{endpoint}`\n\n"
+        "解决办法：充值或切换到其他有额度的服务商 / 模型。\n\n"
+        f"原始报错：{msg}"
+    )
 def _secret(key: str):
     """安全读取 st.secrets，缺失时返回 None（兼容本地无 secrets 文件的环境）。"""
     try:
@@ -637,15 +754,10 @@ with col1:
                             stream_reading_text(api_key_r, base_url_r, model_r, messages)
                         )
                     except openai.AuthenticationError as e:
-                        msg = str(e)
                         st.error(
-                            "🔑 鉴权失败（HTTP 401）：服务商拒绝该 API Key。\n\n"
-                            "常见原因与排查：\n"
-                            "1. Key 夓带了首尾空格 / `Bearer ` 前缀 → 已自动清洗，若仍失败请重新复制完整 Key；\n"
-                            "2. Key 与所选服务商不匹配（OpenAI 的 Key 不能用于 SiliconFlow/DeepSeek，反之亦然）；\n"
-                            "3. Key 已被删除/过期 → 前往对应控制台重新生成；\n"
-                            "4. 账号未实名/未激活 → SiliconFlow 需完成手机号验证后 Key 才生效。\n\n"
-                            f"原始报错：{msg}"
+                            _build_auth_error_msg(
+                                e, api_key_r, endpoint, model_r
+                            )
                         )
                         text = ""
                     except openai.APIConnectionError as e:
@@ -658,15 +770,7 @@ with col1:
                         code = getattr(e, "status_code", None) or 0
                         msg = str(e)
                         if code == 402 or "Insufficient Balance" in msg or "insufficient_quota" in msg:
-                            st.error(
-                                "💸 账户余额不足（HTTP 402 Insufficient Balance）：\n"
-                                "该服务商账户可用额度已用尽，请求被拒。\n\n"
-                                "解决办法（任选其一）：\n"
-                                "1. 前往对应服务商控制台充值（DeepSeek / SiliconFlow）；\n"
-                                "2. 切换到有免费额度的服务商——侧边栏选 **SiliconFlow (硅基流动)**，\n"
-                                "   模型填 `deepseek-ai/DeepSeek-V3` 等免费模型即可。\n\n"
-                                f"原始报错：{msg}"
-                            )
+                            st.error(_build_balance_error_msg(e, endpoint, model_r))
                         elif code == 429:
                             st.error(
                                 "⏳ 请求过于频繁或触发限额（HTTP 429）：\n"
@@ -753,13 +857,19 @@ with col2:
                     try:
                         raw_mcq = generate_mcq(api_key_r, base_url_r, model_r, mcq_messages)
                     except openai.AuthenticationError as e:
-                        st.error(f"🔑 鉴权失败（HTTP 401）：服务商拒绝该 API Key。\n\n{e}")
+                        st.error(
+                            _build_auth_error_msg(e, api_key_r, endpoint, model_r)
+                        )
                         raw_mcq = ""
                     except openai.APIConnectionError as e:
                         st.error(f"🔌 无法连接 API（{endpoint}）：请检查 Base URL、网络或代理设置。\n\n{e}")
                         raw_mcq = ""
                     except openai.APIStatusError as e:
-                        st.error(f"API 调用失败（HTTP {getattr(e, 'status_code', '?')}）：{e}")
+                        code = getattr(e, "status_code", None) or 0
+                        if code == 402 or "Insufficient Balance" in str(e) or "insufficient_quota" in str(e):
+                            st.error(_build_balance_error_msg(e, endpoint, model_r))
+                        else:
+                            st.error(f"API 调用失败（HTTP {code}）：{e}")
                         raw_mcq = ""
                     except Exception as e:
                         st.error(f"出题失败（{type(e).__name__}）：{e}")
