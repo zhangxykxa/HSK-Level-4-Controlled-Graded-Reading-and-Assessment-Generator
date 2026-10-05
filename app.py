@@ -351,20 +351,66 @@ def _has_cloud_api_key() -> bool:
     return False
 
 
-def _resolve_cloud_config():
-    """根据云端 ``DEFAULT_PROVIDER`` 自动解析完整 API 配置。
+def _match_provider_label(provider_label: str):
+    """根据侧边栏选中的服务商名/标签，返回 (provider_key: str, kind: str)。
 
-    读取 ``st.secrets["DEFAULT_PROVIDER"]``（默认 ``"SiliconFlow"``）确定默认服务商，
-    再匹配对应的专用 Key，返回一键配置好的 (api_key, base_url, model, provider_label)。
+    ``kind`` 取值 ``"siliconflow"`` / ``"deepseek"`` / ``"custom"``。
+    provider_key 仅显示用，不会泄露。
 
-    - SiliconFlow（只要含 ``silicon`` / ``硅基`` 任一关键字，均走国际站唯一端点）
-      ``https://api.siliconflow.com/v1``（控制台：https://cloud.siliconflow.com/me/account/ak）
-      也可单独用 ``SILICONFLOW_BASE_URL`` / ``SILICONFLOW_MODEL`` 覆盖默认端点/模型。
-    - DeepSeek：含 ``deep`` / ``深度`` 任一关键字，需配置 ``DEEPSEEK_API_KEY``
+    兼容中英文、不同历史写法，避免改名后配对失败。
+    """
+    s = str(provider_label or "").strip().lower()
+    if not s:
+        return (None, None)
+    if "silicon" in s or "硅基" in s:
+        return ("SILICONFLOW_API_KEY", "siliconflow")
+    if "deep" in s or "深度" in s:
+        return ("DEEPSEEK_API_KEY", "deepseek")
+    if "custom" in s or "自定义" in s:
+        return ("DEFAULT_API_KEY", "custom")
+    return (None, None)
+
+
+def _resolve_cloud_config(provider_label=None):
+    """根据 ``provider_label``（侧边栏当前选中的服务商）优先匹配对应的云端密钥。
+
+    当 ``provider_label`` 为空 / 未指定时，回退到 ``st.secrets["DEFAULT_PROVIDER"]``
+    （默认 ``"SiliconFlow"``），用于首次加载/就绪提示等非生成场景。
+
+    选择规则：
+    - 侧边栏选 **SiliconFlow 国际站** → 只用 ``SILICONFLOW_API_KEY``（不再看 DEFAULT_PROVIDER）
+    - 侧边栏选 **DeepSeek** → 只用 ``DEEPSEEK_API_KEY``
+    - 侧边栏选 **自定义** → 用 ``DEFAULT_API_KEY`` 兜底
+    - 始终支持用对应的 ``_BASE_URL`` / ``_MODEL`` 覆盖默认端点/模型。
 
     Returns:
         (api_key, base_url, model, provider_label)，若云端未配置则返回 ``(None, None, None, None)``
     """
+    # 优先级 1：侧边栏当前实际选择的服务商（精准匹配专用 Key，避免切服务商时 Key 混用）
+    if provider_label:
+        _, kind = _match_provider_label(provider_label)
+        if kind == "siliconflow":
+            key = _secret("SILICONFLOW_API_KEY")
+            if key:
+                base_url = (
+                    _secret("SILICONFLOW_BASE_URL") or "https://api.siliconflow.com/v1"
+                )
+                model = _secret("SILICONFLOW_MODEL") or "deepseek-ai/DeepSeek-V3"
+                return (key, base_url, model, provider_label)
+        elif kind == "deepseek":
+            key = _secret("DEEPSEEK_API_KEY")
+            if key:
+                base_url = _secret("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+                model = _secret("DEEPSEEK_MODEL") or "deepseek-chat"
+                return (key, base_url, model, provider_label)
+        elif kind == "custom":
+            key = _secret("DEFAULT_API_KEY")
+            if key:
+                base_url = _secret("OPENAI_BASE_URL") or _secret("DEFAULT_BASE_URL")
+                model = _secret("OPENAI_MODEL") or _secret("DEFAULT_MODEL")
+                return (key, base_url, model, provider_label)
+
+    # 优先级 2：首次加载 / 就绪提示 → 按 DEFAULT_PROVIDER 确定默认服务商
     default_provider = _secret("DEFAULT_PROVIDER") or "SiliconFlow"
     p_lower = str(default_provider).strip().lower()
     if "silicon" in p_lower or "硅基" in p_lower:
@@ -385,11 +431,15 @@ def _resolve_cloud_config():
     return None, None, None, None
 
 
-def _resolve_api_config(api_key_input, base_url_input, model_input):
+def _resolve_api_config(api_key_input, base_url_input, model_input, provider_label=None):
     """按优先级解析 API 配置：侧边栏手动输入 > 云端 st.secrets > 环境变量。
 
-    云端配置由 :func:`_resolve_cloud_config` 根据 ``DEFAULT_PROVIDER``
-    自动匹配服务商专用 Key 与对应 base_url / model。
+    云端配置由 :func:`_resolve_cloud_config` 处理。若传了 ``provider_label``
+    （即侧边栏当前选中的服务商），会根据该服务商精准匹配对应的专用 Key：
+    - 选 DeepSeek → 只用 ``DEEPSEEK_API_KEY``
+    - 选 SiliconFlow → 只用 ``SILICONFLOW_API_KEY``
+
+    避免了「DEFAULT_PROVIDER=SiliconFlow，但用户切到 DeepSeek 时仍拿错 Key」的混用 401。
 
     自动规整：Key 去空白/剥 ``Bearer `` 前缀、base_url 去末尾斜杠、
     model 去空白。这类粘贴瑕疵常导致 401 'Token is invalid'。
@@ -397,8 +447,9 @@ def _resolve_api_config(api_key_input, base_url_input, model_input):
     Returns:
         (api_key, base_url, model)，缺失项为 ``None``。
     """
-    cloud_key, cloud_url, cloud_model, _ = _resolve_cloud_config()
+    cloud_key, cloud_url, cloud_model, _ = _resolve_cloud_config(provider_label)
 
+    # 侧边栏优先级最高；空值回落到云端；再回落环境变量（兼容历史用法）
     raw_key = api_key_input or cloud_key or os.environ.get("OPENAI_API_KEY")
     raw_url = base_url_input or cloud_url or os.environ.get("OPENAI_BASE_URL") or _secret("OPENAI_BASE_URL")
     raw_model = model_input or cloud_model or os.environ.get("OPENAI_MODEL") or _secret("OPENAI_MODEL")
@@ -689,11 +740,19 @@ model = st.sidebar.text_input(
 
 # —— 🛠️ 调试面板：实时展示实际生效的配置（来自云端 / 侧边栏 / 环境变量）
 with st.sidebar.expander("🛠️ 调试：查看当前实际生效的配置", expanded=False):
-    _dbg_key, _dbg_url, _dbg_mdl = _resolve_api_config(api_key, base_url, model)
+    # 必须把当前侧边栏选中的服务商 provider 传入，确保显示的 Key 和生成时使用的完全一致
+    _dbg_key, _dbg_url, _dbg_mdl = _resolve_api_config(api_key, base_url, model, provider)
+    _match_pk, _match_kind = _match_provider_label(provider)
     _src_key = []
     if api_key and _clean_token(api_key):
         _src_key.append("侧边栏手动输入(覆盖云端)")
-    if _cloud_key:
+    # 根据当前选中的服务商精准显示「对应哪把云端 Key」
+    if _match_pk:
+        _cloud_match_key = _secret(_match_pk)
+        if _cloud_match_key:
+            _src_key.append(f"云端 secrets:{_match_pk}（服务商【{provider}】专用）")
+    # 兜底：如果当前服务商没有专用 Key，但 DEFAULT_PROVIDER 那套云 Key 存在，就保留 _cloud_label 的展示
+    if not _src_key and _cloud_key:
         _src_key.append(f"云端 secrets:{_cloud_label or 'DEFAULT_API_KEY'}")
     if os.environ.get("OPENAI_API_KEY") and not (_clean_token(api_key) or _cloud_key):
         _src_key.append("环境变量 OPENAI_API_KEY")
@@ -701,13 +760,16 @@ with st.sidebar.expander("🛠️ 调试：查看当前实际生效的配置", e
         _src_key.append("未知来源(兜底)")
 
     st.info(
-        "🔍 每次生成时实际发出请求的配置就是下面这组：\n\n"
+        "🔍 每次生成时实际发出请求的配置就是下面这组（随服务商下拉联动）：\n\n"
+        f"**• 当前服务商预设**：`{provider}`\n"
         f"**• Key 来源优先级**：{' → '.join(_src_key) if _src_key else '(未获取到任何 Key)'}\n"
         f"**• API Key 末 4 位**：`{_fmt_key_tail(_dbg_key)}`\n"
         f"**• 🌐 Base URL**：`{_dbg_url or '(空)'}`\n"
         f"**• 🏷️ 模型名**：`{_dbg_mdl or '(空)'}`\n\n"
         "👉 用法：把「API Key 末 4 位」拿去和对应控制台 Key 的末 4 位对比，\n"
-        "   不一致就说明当前生效的不是您以为的那把 Key，检查侧边栏 / Secrets 填写处。",
+        "   不一致就说明当前生效的不是您以为的那把 Key，检查侧边栏 / Secrets 填写处。\n"
+        "   ⚠️ 【关键】：切服务商时，云端 Key 会自动匹配到该服务商专用 Key，\n"
+        "   不会再出现「选 DeepSeek 实际用 SiliconFlow Key」的混用 401。",
         icon="ℹ️",
     )
 
@@ -771,7 +833,9 @@ with col1:
             if locked_words is None or locked_words.empty:
                 st.warning("当前主题下没有可用的 HSK 4 级核心词，请先更换主题/大纲或重新锁定。")
             else:
-                api_key_r, base_url_r, model_r = _resolve_api_config(api_key, base_url, model)
+                api_key_r, base_url_r, model_r = _resolve_api_config(
+                    api_key, base_url, model, provider
+                )
                 if not api_key_r:
                     st.error(
                         "未获取到 API Key：请在侧边栏填写，或在云端 st.secrets 中"
