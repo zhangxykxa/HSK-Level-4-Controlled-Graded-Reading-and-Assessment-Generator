@@ -668,6 +668,8 @@ if _cloud_ready:
     with st.sidebar.expander("🔑 高级设置：使用自定义 API Key", expanded=False):
         api_key = st.text_input(
             "覆盖云端 Key（留空则使用云端配置）:", type="password", key="cfg_api_key",
+            help="⚠️ 只要这里填过任何内容，就会永久覆盖云端配置（哪怕现在看起来是空的，Streamlit session_state 可能仍保留旧值）。"
+                 "如想回到云端 Key，先点浏览器 🔄 刷新整页，再来这里确认确实是空的再生成。",
         )
 else:
     st.sidebar.warning("⚠️ 云端未检测到 API Key，请在下方手动输入。")
@@ -678,12 +680,46 @@ else:
 
 base_url = st.sidebar.text_input(
     "🌐 Base URL", key="cfg_base_url",
-    help="如 https://api.deepseek.com 或 https://api.siliconflow.cn/v1",
+    help="如 https://api.deepseek.com 或 https://api.siliconflow.com/v1",
 )
 model = st.sidebar.text_input(
     "🏷️ 模型名 (Model)", key="cfg_model",
     help="如 deepseek-chat / deepseek-ai/DeepSeek-V3",
 )
+
+# —— 🛠️ 调试面板：实时展示实际生效的配置（来自云端 / 侧边栏 / 环境变量）
+with st.sidebar.expander("🛠️ 调试：查看当前实际生效的配置", expanded=False):
+    _dbg_key, _dbg_url, _dbg_mdl = _resolve_api_config(api_key, base_url, model)
+    _src_key = []
+    if api_key and _clean_token(api_key):
+        _src_key.append("侧边栏手动输入(覆盖云端)")
+    if _cloud_key:
+        _src_key.append(f"云端 secrets:{_cloud_label or 'DEFAULT_API_KEY'}")
+    if os.environ.get("OPENAI_API_KEY") and not (_clean_token(api_key) or _cloud_key):
+        _src_key.append("环境变量 OPENAI_API_KEY")
+    if not _src_key and _dbg_key:
+        _src_key.append("未知来源(兜底)")
+
+    st.info(
+        "🔍 每次生成时实际发出请求的配置就是下面这组：\n\n"
+        f"**• Key 来源优先级**：{' → '.join(_src_key) if _src_key else '(未获取到任何 Key)'}\n"
+        f"**• API Key 末 4 位**：`{_fmt_key_tail(_dbg_key)}`\n"
+        f"**• 🌐 Base URL**：`{_dbg_url or '(空)'}`\n"
+        f"**• 🏷️ 模型名**：`{_dbg_mdl or '(空)'}`\n\n"
+        "👉 用法：把「API Key 末 4 位」拿去和对应控制台 Key 的末 4 位对比，\n"
+        "   不一致就说明当前生效的不是您以为的那把 Key，检查侧边栏 / Secrets 填写处。",
+        icon="ℹ️",
+    )
+
+    # 如果侧边栏输入框「非空」（用户以为空但 session_state 可能残留旧值）提示
+    if _clean_token(api_key):
+        st.warning(
+            "⚠️ 注意：「高级设置」里的 API Key 输入框当前**非空**（可能残留历史填过的旧 Key），\n"
+            "   正在**优先使用这把 Key 覆盖云端配置**。\n"
+            "   如果想切回云端 Secrets 的 Key → 先刷新整页 🔄，\n"
+            "   或清空输入框内容再点一次生成。",
+            icon="⚠️",
+        )
 
 st.sidebar.write("---")
 st.sidebar.markdown("💡 *本原型专为语言教师备课设计，生成材料严格受控于所选大纲词库。*")
