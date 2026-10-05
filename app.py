@@ -9,14 +9,12 @@ import openai
 # 1. 页面基本配置
 st.set_page_config(page_title="HSK 4 Graded Material Generator", layout="wide")
 
-# 彻底隐藏右上角 GitHub 信息与 Streamlit 开发痕迹（CSS 注入）
+# 隐藏 Streamlit 开发痕迹（CSS 注入）
+# 注意：不隐藏 header 和 stStatusWidget，否则 Streamlit Cloud 会导致页面白屏/无法交互
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
     footer {visibility: hidden;}
-    div[data-testid="stDecoration"] {display: none;}
-    div[data-testid="stStatusWidget"] {display: none;}
     .viewerBadge_container__17vsn {display: none !important;}
     </style>
 """
@@ -577,7 +575,14 @@ st.sidebar.markdown("💡 *本原型专为语言教师备课设计，生成材�
 # 锁定教学词汇：加载词库 -> 按主题+级别随机筛选 -> 主界面展示
 # ============================================================================
 # 加载当前大纲词库（缓存，切换版本自动重载）
-vocab_df = load_vocab(syllabus_version)
+try:
+    vocab_df = load_vocab(syllabus_version)
+except Exception as e:
+    st.error(
+        f"❌ 词汇表加载失败：{e}\n\n"
+        "请确保仓库根目录下存在对应的 CSV 文件。"
+    )
+    st.stop()
 
 # 组合（大纲/主题/词数）变化时，重置「重新随机」计数器
 combo_sig = _combo_seed(syllabus_version, theme_choice, target_vocab_count)
