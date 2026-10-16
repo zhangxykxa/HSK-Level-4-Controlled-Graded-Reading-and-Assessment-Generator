@@ -997,20 +997,21 @@ def build_generation_messages(
             )
     vocab_block = "\n".join(f"- {w}" for w in word_list) if word_list else "- （无）"
 
-    system_prompt = f"""你是一名资深的国际中文教师与分级阅读材料编写专家，精通 HSK（汉语水平考试）词汇大纲。请根据以下教学约束，创作一篇适合 HSK 4 级学习者的中文分级阅读短文。
+    system_prompt = f"""你是一名资深的国际中文教师与分级阅读材料编写专家，精通 HSK（汉语水平考试）词汇大纲，专精「受控文本生成（Controlled Text Generation, CTG）」。请严格依据以下硬约束，生成一篇适合 HSK 4 级学习者的中文分级阅读短文。
 
 【大纲版本】HSK {version_short}
 【教学主题】{topic}
-【目标字数】约 {char_limit} 个汉字（允许 ±10% 浮动）
-【必须融入的核心词汇】以下 {len(word_list)} 个 HSK 4 级目标词，须自然、准确地融入文中（可变形但不改变词义核心）：
+【目标字数】{char_limit} 个汉字（允许 ±10% 浮动）
+【受控词汇白名单（核心词，必须 100% 融入）】以下 {len(word_list)} 个 HSK 4 级目标词，须自然、准确地融入文中（可变形，但不得改变词义核心）：
 {vocab_block}
 
-【写作要求】
-1. 词汇难度严格控制在 HSK 1–4 级范围内，不得使用 HSK 5/6 级超纲词。
-2. 句式多样但规范，避免过长嵌套，适合中级学习者阅读。
-3. 内容紧扣「{topic}」主题，情节完整、逻辑连贯、有真实生活气息。
-4. 全部核心词须在文中出现，并在文末以「核心词回顾」列表形式再次列出（词 + 拼音 + 简释）。
-5. 仅输出短文正文与「核心词回顾」两段，不要输出任何额外解释、标题编号或英文翻译。
+【受控生成硬约束（必须全部满足）】
+1. 词汇受控：正文用词须落在 HSK 1–4 级大纲范围内，严禁使用 HSK 5/6 级或大纲外超纲词。
+2. 核心词全覆盖：上述 {len(word_list)} 个核心词必须全部出现，缺一不可。
+3. 字数受控：正文汉字数严格控制在 {char_limit} 字附近（±10% 以内）。
+4. 主题受控：内容必须紧扣「{topic}」主题，情节完整、逻辑连贯、贴近真实生活。
+5. 难度受控：句式多样但规范，避免过长嵌套，适合中级学习者阅读。
+6. 输出受控：先输出短文正文，再以「核心词回顾」列表复现全部核心词（词 + 拼音 + 简释）；除此之外不得输出任何额外解释、标题编号、Markdown 标题或英文翻译。
 
 现在请开始创作。"""
     return [
@@ -1060,9 +1061,9 @@ def build_mcq_messages(
             )
     vocab_block = "\n".join(f"- {w}" for w in word_list) if word_list else "- （无）"
 
-    system_prompt = f"""你是一名国际汉语教学测评专家，擅长为 HSK 4 级学习者设计高质量的阅读理解单项选择题（MCQ）。
+    system_prompt = f"""你是一名国际汉语教学测评专家，专精「自动命题（Automatic Question Generation, AQG）」与「干扰项对齐（Distractor Alignment）」，擅长为 HSK 4 级学习者设计高质量的阅读理解单项选择题（MCQ）。
 
-请根据以下文章与目标词汇，出 {num_questions} 道四选一阅读理解题。
+请基于下列文章与目标词汇，出 {num_questions} 道四选一阅读理解题。
 
 【文章内容】
 {article_text}
@@ -1070,15 +1071,19 @@ def build_mcq_messages(
 【目标词汇（HSK 4 级）】
 {vocab_block}
 
-【出题要求】
-1. 题目须针对文章核心事实或目标词汇的用法/含义设问，避免考查无关细节。
-2. 每题提供 A/B/C/D 四个选项，其中只有一个正确答案。
-3. **干扰项（Distractors）必须具备迷惑性**——干扰项应与文章内容相关、语义合理且语法正确，不得出现荒谬、无关或"一眼假"的选项。干扰项最好利用文章中的近似表达、同义词、或学习者的常见误解来设置。
-4. 每题附上详细解析，说明正确答案为何正确、各干扰项为何不正确（引用文章原文或目标词汇释义）。
-5. 选项文本语言为中文，难度控制在 HSK 4 级以内。
+【命题要求】
+1. 设问须针对文章核心事实或目标词汇的用法/含义，避免考查无关细节。
+2. 每题提供 A/B/C/D 四个选项，有且只有一个正确答案。
+3. 【干扰项对齐（Distractor Alignment）】每个干扰项必须与正确答案严格「对齐」：
+   - 同范畴：与正确答案属于同一语义范畴 / 同一信息类型（如时间对时间、地点对地点、人物对人物）；
+   - 同形近：长度与句式与正确答案大体相当，避免畸长或畸短；
+   - 同来源：优先取自文章中的近似表达、同义/近义表述，或目标词汇体系内的其他词；
+   - 高迷惑：语法正确、语义合理，不得出现荒谬、无关或"一眼假"的选项；避免「全部/总是/绝不」等绝对化表述。
+4. 每题附上详细解析：说明正确答案为何正确，并逐一说明各干扰项为何不正确（引用文章原文或目标词汇释义）。
+5. 全部文本（题干、选项、解析）均为中文，难度控制在 HSK 4 级以内。
 
 【输出格式】
-请严格输出以下 JSON 数组（不要输出任何额外文字、Markdown 标记或解释）：
+请严格只输出以下 JSON 数组，不得输出任何额外文字、Markdown 代码围栏（```）或解释：
 
 [
   {{
@@ -1095,7 +1100,10 @@ def build_mcq_messages(
 ]"""
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"请基于上述文章出 {num_questions} 道 MCQ，严格按 JSON 数组格式输出。"},
+        {
+            "role": "user",
+            "content": f"请基于上述文章出 {num_questions} 道 MCQ，仅输出 JSON 数组，不要使用 Markdown 代码围栏。",
+        },
     ]
 
 
@@ -1116,29 +1124,45 @@ def generate_mcq(api_key, base_url, model, messages, temperature=0.5) -> str:
 
 
 def parse_mcq_json(raw: str) -> list[dict]:
-    """从大模型返回文本中解析 MCQ JSON 数组。
+    """从大模型返回文本中稳健解析 MCQ JSON 数组。
 
-    自动剥离常见包裹：```json ... ``` 围栏、首尾多余文字。
-    解析失败时返回空列表，调用方可据此展示友好错误提示。
+    逐级容错，确保不因 Markdown 围栏（```json / ```）或前后缀说明文字而崩溃：
+    1. 强清洗首尾 Markdown 围栏（忽略大小写）；
+    2. 截取首个 ``[`` 与末个 ``]`` 之间的主体；
+    3. ``json.loads`` 失败时，用正则 ``\\[.*\\]``（re.DOTALL）兜底提取最外层数组；
+    4. 仍失败则返回空列表，由调用方展示原始返回内容。
+    最后逐题做结构校验，仅保留合法题目。
     """
     import json
     import re
 
-    text = raw.strip()
-    # 剥离 ```json ... ``` 围栏
-    fence = re.search(r"```(?:json)?\s*(.+?)\s*```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1).strip()
-    # 提取第一个 JSON 数组
+    text = (raw or "").strip()
+
+    # 1) 强清洗 Markdown 围栏：首部 ```json / ```，尾部 ```
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"```$", "", text).strip()
+
+    # 2) 截取首个 '[' 到末个 ']' 之间的主体
     start = text.find("[")
     end = text.rfind("]")
     if start != -1 and end != -1 and end > start:
         text = text[start : end + 1]
+
+    # 3) 解析；失败则正则兜底提取最外层数组
+    data = None
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                data = None
+    if not isinstance(data, list):
         return []
-    # 校验每道题结构
+
+    # 4) 逐题结构校验
     valid = []
     for item in data:
         if (
@@ -1147,6 +1171,7 @@ def parse_mcq_json(raw: str) -> list[dict]:
             and "options" in item
             and "answer" in item
             and "explanation" in item
+            and isinstance(item["options"], dict)
             and all(k in item["options"] for k in ("A", "B", "C", "D"))
             and item["answer"] in ("A", "B", "C", "D")
         ):
