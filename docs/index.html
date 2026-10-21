@@ -43,12 +43,12 @@
     }
     .topbar {
       flex: 0 0 auto;
-      height: var(--bar-h);
+      height: 48px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 16px;
-      padding: 0 16px;
+      gap: 12px;
+      padding: 0 12px;
       border-bottom: 1px solid var(--border);
       background: var(--bg);
     }
@@ -69,19 +69,32 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
     .cta {
       flex: 0 0 auto;
       display: inline-block;
-      padding: 8px 14px;
+      padding: 7px 12px;
       border-radius: 8px;
       background: var(--accent);
       color: var(--accent-fg);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       text-decoration: none;
       white-space: nowrap;
     }
     .cta:hover { opacity: .9; }
+    .link-lite {
+      color: var(--muted);
+      font-size: 12px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .link-lite:hover { text-decoration: underline; }
     .stage {
       flex: 1 1 auto;
       min-height: 0;
@@ -109,6 +122,7 @@
     @media (max-width: 640px) {
       .brand .subtitle { display: none; }
       .cta { padding: 7px 10px; font-size: 12px; }
+      .link-lite { display: none; }
     }
   </style>
 </head>
@@ -119,8 +133,10 @@
         <div class="title">HSK 4 级受控分级阅读与测评生成器</div>
         <div class="subtitle">香港理工大学 · 二语教学（L2 Pedagogy）学位研究项目</div>
       </div>
-      <!-- 替换为你的真实问卷链接（与 app.py 中的 SURVEY_URL 保持一致） -->
-      <a class="cta" href="https://forms.gle/your-survey-link-here" target="_blank" rel="noopener noreferrer">填写专家评估量表</a>
+      <div class="actions">
+        <a class="link-lite" href="https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app/" target="_blank" rel="noopener noreferrer">打开全功能版（可折叠侧边栏）</a>
+        <a class="cta" href="https://v.wjx.cn/vm/w2FDyLB.aspx#" target="_blank" rel="noopener noreferrer">填写专家评估量表</a>
+      </div>
     </header>
     <main class="stage">
       <iframe

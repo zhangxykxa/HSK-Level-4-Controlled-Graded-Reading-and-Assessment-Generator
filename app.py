@@ -17,9 +17,12 @@ hide_streamlit_style = """
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .viewerBadge_container__17vsn {display: none !important;}
-    .block-container {padding-top: 1.4rem; padding-bottom: 2rem;}
-    h1 {margin-bottom: 0.2rem !important;}
-    h2, h3 {margin-top: 0.3rem !important;}
+    .block-container {padding-top: 0.85rem; padding-bottom: 1.6rem;}
+    h1 {margin-bottom: 0.1rem !important;}
+    h2, h3 {margin-top: 0.15rem !important; margin-bottom: 0.25rem !important;}
+    [data-testid="stMetricLabel"] {font-size: 0.92rem !important;}
+    [data-testid="stMetricValue"] {font-size: 2.2rem !important;}
+    [data-testid="stMetricDelta"] {font-size: 0.95rem !important;}
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
@@ -407,14 +410,64 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
             # 覆盖率计数：分子按 (covered/total) 比例算进命中，避免虚高
             if total_unichars_in_tok > 0:
                 syllabus_hit_count += covered_unichars / total_unichars_in_tok
+            # 若多字组合中的每个汉字都已在大纲字表内，则不再标成疑似超纲词
+            if total_unichars_in_tok > 0 and covered_unichars == total_unichars_in_tok:
+                html_parts.append(_html_escape(tok))
+                continue
+
+            # 将多字 token 再按「字是否在 syllable_chars 中」切分，只高亮真正连续超纲的片段
+            seg_buf = ""
+            seg_is_oos = None
+            segs = []
+            for c in tok:
+                is_oos_char = _is_cjk_char(c) and c not in syllable_chars
+                if seg_is_oos is None or is_oos_char == seg_is_oos:
+                    seg_buf += c
+                    seg_is_oos = is_oos_char
+                else:
+                    segs.append((seg_buf, seg_is_oos))
+                    seg_buf = c
+                    seg_is_oos = is_oos_char
+            if seg_buf:
+                segs.append((seg_buf, seg_is_oos))
+
+            for seg, is_oos_seg in segs:
+                if not is_oos_seg:
+                    html_parts.append(_html_escape(seg))
+                    continue
+                if seg not in oos_seen:
+                    pinyin_parts = []
+                    pos_tokens = []
+                    def_tokens = []
+                    for c in seg:
+                        if c in word_meta:
+                            py, po, df = word_meta[c]
+                            if py:
+                                pinyin_parts.append(py)
+                            if po and po not in pos_tokens:
+                                pos_tokens.append(po)
+                            if df:
+                                def_tokens.append(f"{c}:{df}")
+                    py = " ".join(p for p in pinyin_parts if p)
+                    oos_seen[seg] = {
+                        "word": seg,
+                        "pinyin": py or "",
+                        "pos": "；".join(pos_tokens) if pos_tokens else "",
+                        "definition": " ｜ ".join(def_tokens) if def_tokens else "",
+                        "count": 1,
+                    }
+                else:
+                    oos_seen[seg]["count"] += 1
+                html_parts.append(
+                    f'<span style="color:#FF6B35;text-decoration:underline;text-decoration-color:#FF6B35;text-decoration-thickness:1.5px;text-underline-offset:3px;" title="疑似超纲词">{_html_escape(seg)}</span>'
+                )
+            continue
 
         # 其余：超纲词 / 字
         if tok not in oos_seen:
-            # 对多字超纲词：尝试逐字拼出拼音（字级元信息）
             pinyin_parts = []
             pos_tokens = []
             def_tokens = []
-            # 对词级别的超纲，尝试查每个单字的拼音（若该单字作为大纲词）
             for c in tok:
                 if c in word_meta:
                     py, po, df = word_meta[c]
@@ -435,7 +488,6 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
         else:
             oos_seen[tok]["count"] += 1
 
-        # 高亮超纲词：橙色文字 + 下划线
         html_parts.append(
             f'<span style="color:#FF6B35;text-decoration:underline;text-decoration-color:#FF6B35;text-decoration-thickness:1.5px;text-underline-offset:3px;" title="疑似超纲词">{_html_escape(tok)}</span>'
         )
@@ -510,11 +562,12 @@ def render_compliance_report(analysis: dict):
     详细内容按「正文高亮 / 超纲词列表 / 核心词融入」切分到三个标签页。
     """
     with st.expander("📊 本文 HSK 4 大纲合规度检测分析报告", expanded=False):
-        # —— 核心指标：单行 4 列横向展示 ——
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        # —— 核心指标：两行展示，避免窄屏和双栏布局下被截断 ——
+        top_kpi1, top_kpi2 = st.columns(2)
+        bottom_kpi1, bottom_kpi2 = st.columns(2)
 
         total_chars = analysis["total_cjk_chars"]
-        with kpi1:
+        with top_kpi1:
             # 字数目标 250–350
             ok_len = 250 <= total_chars <= 350
             if total_chars < 250:
@@ -525,35 +578,35 @@ def render_compliance_report(analysis: dict):
                 delta_len = "达标"
             st.metric(
                 "总字数",
-                f"{total_chars} 字",
+                f"{total_chars}",
                 delta=delta_len,
                 delta_color="normal" if ok_len else "inverse",
             )
 
         cov = analysis["syllabus_coverage_pct"]
-        with kpi2:
+        with top_kpi2:
             ok95 = cov >= 95
             st.metric(
                 "大纲覆盖率",
-                f"{cov}%",
+                f"{cov:.1f}%",
                 delta="≥95%" if ok95 else "<95%",
                 delta_color="normal" if ok95 else "inverse",
             )
 
-        with kpi3:
+        with bottom_kpi1:
             pct = analysis["target_integration_pct"]
             st.metric(
                 "核心词融入",
-                f"{pct}%  ({analysis['target_hit_count']}/{analysis['target_total']})",
+                f"{analysis['target_hit_count']}/{analysis['target_total']}",
                 delta="全部命中" if analysis["all_targets_hit"] else "仍有缺失",
                 delta_color="normal" if analysis["all_targets_hit"] else "inverse",
             )
 
         oos_words = analysis["out_of_syllabus_words"]
-        with kpi4:
+        with bottom_kpi2:
             st.metric(
                 "疑似超纲词",
-                f"{len(oos_words)} 个",
+                f"{len(oos_words)}",
                 delta="无超纲" if not oos_words else "查看列表",
                 delta_color="normal" if not oos_words else "inverse",
             )
