@@ -1,5 +1,6 @@
 import hashlib
 import os
+import random
 from pathlib import Path
 
 import streamlit as st
@@ -16,6 +17,9 @@ hide_streamlit_style = """
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .viewerBadge_container__17vsn {display: none !important;}
+    .block-container {padding-top: 1.4rem; padding-bottom: 2rem;}
+    h1 {margin-bottom: 0.2rem !important;}
+    h2, h3 {margin-top: 0.3rem !important;}
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
@@ -146,8 +150,8 @@ def render_locked_words(words_df: pd.DataFrame, topic_label: str) -> None:
         f"主题：{_map_topic(topic_label)} ｜ 已锁定 {len(words_df)} 个 HSK 4 级目标词汇"
     )
 
-    # —— 卡片式展示：每行 4 个词卡 ——
-    cards_per_row = 4
+    # —— 卡片式展示：每行 5 个词卡，尽量压缩首页纵向高度 ——
+    cards_per_row = 5
     show_cols = ["Word", "Pinyin", "POS", "Definition"]
     rows = [words_df.iloc[i : i + cards_per_row] for i in range(0, len(words_df), cards_per_row)]
     for row in rows:
@@ -155,9 +159,9 @@ def render_locked_words(words_df: pd.DataFrame, topic_label: str) -> None:
         for col, (_, item) in zip(cols, row.iterrows()):
             with col:
                 with st.container(border=True):
-                    st.markdown(f"#### {item['Word']}")
+                    st.markdown(f"**{item['Word']}**")
                     st.caption(f"{item.get('Pinyin', '')} · {item.get('POS', '')}")
-                    st.write(item.get("Definition", ""))
+                    st.caption(item.get("Definition", "") or " ")
 
     # —— 完整表格，便于复制 / 排查 ——
     with st.expander("查看完整词汇表", expanded=False):
@@ -321,6 +325,30 @@ def _max_match_tokenize(text: str, syllable_words):
     return _merge_unmatched_cjk_runs(tokens)
 
 
+def _split_generated_body_and_review(text: str) -> tuple[str, str]:
+    """把生成结果拆成「正文」与「核心词回顾」两部分。
+
+    CTG Prompt 要求模型在正文后追加一段「核心词回顾」列表。这一段并不属于
+    阅读正文本身，若直接参与合规度检测，会把词表说明里的字也计入超纲词统计。
+
+    Returns:
+        (body_text, review_text)
+    """
+    import re
+
+    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    match = re.search(
+        r"(?:^|\n)\s*[【\[]?\s*核心词回顾\s*[】\]]?\s*[:：]?\s*(?:\n|$)",
+        raw,
+        flags=re.MULTILINE,
+    )
+    if not match:
+        return raw.strip(), ""
+    body = raw[: match.start()].rstrip()
+    review = raw[match.end() :].strip()
+    return body, review
+
+
 def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
     """对生成的分级阅读文章做全流程合规度分析。
 
@@ -334,11 +362,13 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
     """
     word_meta, syllable_words, syllable_chars = _build_syllabus_dicts(vocab_df)
 
-    # 1) 总字数（汉字，不含标点/空格/数字；和 250–350 字目标对齐）
-    total_cjk_chars = _count_cjk_chars(text)
+    body_text, review_text = _split_generated_body_and_review(text)
 
-    # 2) 最大匹配切分 + 高亮 + 统计
-    tokens = _max_match_tokenize(text, syllable_words)
+    # 1) 总字数（仅统计正文，不把「核心词回顾」计入）
+    total_cjk_chars = _count_cjk_chars(body_text)
+
+    # 2) 最大匹配切分 + 高亮 + 统计（仅针对正文）
+    tokens = _max_match_tokenize(body_text, syllable_words)
 
     total_token_count = 0        # 有效中文词元数（单字+多字词，不含标点）
     syllabus_hit_count = 0       # 命中大纲词（含单字命中 syllable_chars 的）
@@ -424,7 +454,7 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
     if locked_words_df is not None and not locked_words_df.empty:
         for _, r in locked_words_df.iterrows():
             w = str(r.get("Word", "") or "").strip()
-            hit = bool(w) and (w in text)
+            hit = bool(w) and (w in body_text)
             if hit:
                 target_hit_count += 1
             target_words.append(
@@ -457,6 +487,8 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
         "syllabus_coverage_pct": round(coverage, 2),
         "out_of_syllabus_words": out_of_syllabus_words,
         "highlighted_html": highlighted_html,
+        "body_text": body_text,
+        "review_text": review_text,
     }
 
 
@@ -486,13 +518,13 @@ def render_compliance_report(analysis: dict):
             # 字数目标 250–350
             ok_len = 250 <= total_chars <= 350
             if total_chars < 250:
-                delta_len = f"偏短，距离下限还需 {250 - total_chars} 字"
+                delta_len = f"偏短 +{250 - total_chars} 字"
             elif total_chars > 350:
-                delta_len = f"偏长，超出上限 {total_chars - 350} 字"
+                delta_len = f"偏长 +{total_chars - 350} 字"
             else:
-                delta_len = "在 250–350 字目标范围内 ✅"
+                delta_len = "达标"
             st.metric(
-                "总字数 (Total Characters)",
+                "总字数",
                 f"{total_chars} 字",
                 delta=delta_len,
                 delta_color="normal" if ok_len else "inverse",
@@ -502,30 +534,31 @@ def render_compliance_report(analysis: dict):
         with kpi2:
             ok95 = cov >= 95
             st.metric(
-                "大纲词汇覆盖率 (Lexical Coverage)",
+                "大纲覆盖率",
                 f"{cov}%",
-                delta="≥ 95% (Laufer 1989 阈值 ✅)" if ok95 else "< 95% 建议调整",
+                delta="≥95%" if ok95 else "<95%",
                 delta_color="normal" if ok95 else "inverse",
             )
 
         with kpi3:
             pct = analysis["target_integration_pct"]
             st.metric(
-                "核心词融入率 (Target Integration)",
+                "核心词融入",
                 f"{pct}%  ({analysis['target_hit_count']}/{analysis['target_total']})",
-                delta="✅ 全部命中" if analysis["all_targets_hit"] else "⚠️ 仍有缺失核心词",
+                delta="全部命中" if analysis["all_targets_hit"] else "仍有缺失",
                 delta_color="normal" if analysis["all_targets_hit"] else "inverse",
             )
 
         oos_words = analysis["out_of_syllabus_words"]
         with kpi4:
             st.metric(
-                "疑似超纲生词 (Out-of-Syllabus)",
+                "疑似超纲词",
                 f"{len(oos_words)} 个",
-                delta="✅ 无超纲词" if not oos_words else "见「超纲词列表」标签页",
+                delta="无超纲" if not oos_words else "查看列表",
                 delta_color="normal" if not oos_words else "inverse",
             )
 
+        st.caption("说明：总字数仅统计正文；覆盖率参考 Laufer (1989) 95% 阈值。")
         st.markdown("---")
 
         # —— 详细内容按标签页切分，减少纵向堆叠 ——
@@ -535,7 +568,7 @@ def render_compliance_report(analysis: dict):
 
         # 标签页 1：高亮正文
         with tab_hl:
-            st.caption("橙色下划线 = 疑似超纲词")
+            st.caption("橙色下划线 = 疑似超纲词；「核心词回顾」列表已从本页和统计中排除")
             st.markdown(
                 f'<div style="line-height:2;font-size:16px;padding:12px 14px;border:1px solid #eee;border-radius:8px;background:#fff;">{analysis["highlighted_html"]}</div>',
                 unsafe_allow_html=True,
@@ -561,24 +594,21 @@ def render_compliance_report(analysis: dict):
             if not analysis["target_words"]:
                 st.info("当前锁定词汇为空，跳过核心词融入率展示。")
             else:
-                rows_per = 4
-                chunks = [
-                    analysis["target_words"][i : i + rows_per]
-                    for i in range(0, len(analysis["target_words"]), rows_per)
-                ]
-                for chunk in chunks:
-                    cols = st.columns(rows_per)
-                    for col, tw in zip(cols, chunk):
-                        with col:
-                            with st.container(border=True):
-                                status = "✅ 命中" if tw["hit"] else "❌ 未命中"
-                                st.markdown(f"#### {tw['word']} {status}")
-                                st.caption(
-                                    f"{tw['pinyin']} · {tw['pos']}"
-                                    if tw["pinyin"] or tw["pos"]
-                                    else " "
-                                )
-                                st.write(tw["definition"] or "")
+                for tw in analysis["target_words"]:
+                    with st.container(border=True):
+                        c1, c2, c3, c4 = st.columns([1.3, 1.0, 1.8, 3.4])
+                        with c1:
+                            st.markdown(f"**{tw['word']}**")
+                        with c2:
+                            status = "✅ 命中" if tw["hit"] else "❌ 未命中"
+                            st.caption(status)
+                        with c3:
+                            meta = " · ".join(
+                                [x for x in (tw["pinyin"], tw["pos"]) if x]
+                            )
+                            st.caption(meta or "—")
+                        with c4:
+                            st.caption(tw["definition"] or "—")
 
         # 学术注释
         st.markdown("---")
@@ -1125,6 +1155,7 @@ def build_aqg_prompt(
 【命题要求】
 1. 设问须针对文章核心事实或目标词汇的用法/含义，避免考查无关细节。
 2. 每题提供 A/B/C/D 四个选项，有且只有一个正确答案。
+2.1 正确答案所在字母不得机械固定为 A；在整组题目中应自然分布于 A/B/C/D。
 3. 【干扰项对齐（Distractor Alignment）】每个干扰项必须与正确答案严格「对齐」：
    - 同范畴：与正确答案属于同一语义范畴 / 同一信息类型（如时间对时间、地点对地点、人物对人物）；
    - 同形近：长度与句式与正确答案大体相当，避免畸长或畸短；
@@ -1145,8 +1176,8 @@ def build_aqg_prompt(
       "C": "选项C内容",
       "D": "选项D内容"
     }},
-    "answer": "A",
-    "explanation": "正确答案为A，因为……；B/C/D不正确，因为……。"
+    "answer": "C",
+    "explanation": "正确答案为C，因为……；A/B/D不正确，因为……。"
   }}
 ]"""
 
@@ -1214,6 +1245,79 @@ def _clean_json_text(raw: str) -> str:
     return text
 
 
+def _remap_option_letters(text: str, letter_map: dict[str, str]) -> str:
+    """按新旧映射重写解析文本中的 A/B/C/D 标记。"""
+    import re
+
+    raw = str(text or "")
+    if not raw or not letter_map:
+        return raw
+
+    pattern = re.compile(r"(?<![A-Za-z0-9])[ABCD](?![A-Za-z0-9])")
+    return pattern.sub(lambda m: letter_map.get(m.group(0), m.group(0)), raw)
+
+
+def _shuffle_mcq_options(question_item: dict, target_answer: str | None = None) -> dict:
+    """对单题选项做确定性洗牌，并把正确答案放到指定字母位。"""
+    options = question_item.get("options", {})
+    answer = question_item.get("answer", "")
+    if not isinstance(options, dict) or answer not in ("A", "B", "C", "D"):
+        return question_item
+
+    if target_answer not in ("A", "B", "C", "D"):
+        target_answer = "A"
+
+    old_pairs = {k: options[k] for k in ("A", "B", "C", "D")}
+    distractor_keys = [k for k in ("A", "B", "C", "D") if k != answer]
+    seed_src = (
+        f"{question_item.get('question', '')}|"
+        f"{answer}|"
+        f"{'|'.join(str(old_pairs[k]) for k in ('A', 'B', 'C', 'D'))}|"
+        f"{target_answer}"
+    )
+    seed_val = int(hashlib.md5(seed_src.encode("utf-8")).hexdigest()[:8], 16)
+    rnd = random.Random(seed_val)
+    rnd.shuffle(distractor_keys)
+
+    remaining_slots = [k for k in ("A", "B", "C", "D") if k != target_answer]
+    rnd.shuffle(remaining_slots)
+
+    old_to_new = {answer: target_answer}
+    for old_key, new_key in zip(distractor_keys, remaining_slots):
+        old_to_new[old_key] = new_key
+
+    new_options = {new_key: old_pairs[old_key] for old_key, new_key in old_to_new.items()}
+
+    updated = dict(question_item)
+    updated["options"] = new_options
+    updated["answer"] = old_to_new.get(answer, answer)
+    updated["explanation"] = _remap_option_letters(
+        question_item.get("explanation", ""), old_to_new
+    )
+    return updated
+
+
+def _spread_mcq_answer_keys(question_items: list[dict]) -> list[dict]:
+    """让一组 MCQ 的正确答案在 A/B/C/D 间尽量分散。"""
+    if not question_items:
+        return question_items
+
+    letters = ["A", "B", "C", "D"]
+    seed_src = "|".join(str(q.get("question", "")) for q in question_items)
+    seed_val = int(hashlib.md5(seed_src.encode("utf-8")).hexdigest()[:8], 16)
+    rnd = random.Random(seed_val)
+    rnd.shuffle(letters)
+
+    targets = []
+    for idx, _ in enumerate(question_items):
+        targets.append(letters[idx % len(letters)])
+
+    return [
+        _shuffle_mcq_options(item, target_answer=target)
+        for item, target in zip(question_items, targets)
+    ]
+
+
 def parse_mcq_json(raw: str) -> list[dict]:
     """从大模型返回文本中稳健解析 MCQ JSON 数组。
 
@@ -1256,7 +1360,7 @@ def parse_mcq_json(raw: str) -> list[dict]:
             and item["answer"] in ("A", "B", "C", "D")
         ):
             valid.append(item)
-    return valid
+    return _spread_mcq_answer_keys(valid)
 
 
 def enrich_oos_words(api_key, base_url, model, words) -> dict:
