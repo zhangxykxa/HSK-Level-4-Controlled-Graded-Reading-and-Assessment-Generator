@@ -1351,25 +1351,26 @@ st.sidebar.markdown("💡 *本原型专为语言教师备课设计，生成材�
 # 功能三：侧边栏挂载「教学效度评估反馈」——科研闭环入口
 # ============================================================================
 st.sidebar.write("---")
-st.sidebar.subheader("📋 教学效度评估反馈（专家试用）")
+st.sidebar.subheader("📋 学术研究说明 / Research Notice")
 st.sidebar.info(
-    "🎓 尊敬的专家：\n\n"
-    "本系统为 **香港理工大学（The Hong Kong Polytechnic University）** "
-    "学位研究项目（MA Teaching Chinese as a Second Language / 汉语作为第二语言教学）"
-    "开发的受控分级阅读与测评原型，旨在服务 HSK 4 级教学的教材开发与课堂实践。\n\n"
-    "您的真实试用反馈对本研究的效度验证至关重要。"
-    "诚邀您使用本系统生成一篇教案后，点击下方按钮填写 5 分制专家评估量表"
-    "（约 5 分钟），以帮助完善本系统的课程适配性与学术可信度。",
+    "🎓 欢迎您试用本系统。\n\n"
+    "本原型系统为 **香港理工大学专业进修学院（PolyU SPEED）语文及传意学部** "
+    "**「人工智能与科技辅助语言教学文学硕士」** 顶石研究项目 "
+    "**LCS5026** 的开发成果。\n\n"
+    "系统旨在通过生成式 AI 赋能 **HSK 4 级分级阅读生成** 与 "
+    "**词性对齐选择题命制**，协助对外汉语教师更高效地完成备课、选材与课堂活动设计。\n\n"
+    "若您愿意，也诚挚邀请您在体验后填写下方专家评估量表。"
+    "您的反馈将用于支持本项目的教学效度分析与学术研究完善。",
     icon="ℹ️",
 )
-# TODO(zhangxykxa / 研究者)：把下面的 URL 替换为实际问卷星 / Google Forms 问卷链接
-SURVEY_URL = "https://forms.gle/your-survey-link-here"
+# 问卷星 · 专家评估量表（点击后在新标签页打开）
+SURVEY_URL = "https://v.wjx.cn/vm/w2FDyLB.aspx#"
 st.sidebar.link_button(
     "👉 点击填写 5 分制专家评估量表",
     SURVEY_URL,
     use_container_width=True,
     type="primary",
-    help="新标签页打开问卷；如您还没创建问卷，先在问卷星 / Google Forms 建好，再把链接填到源码 SURVEY_URL 变量即可。",
+    help="点击后将在新标签页打开问卷星 · 5 分制专家评估量表。",
 )
 st.sidebar.caption(
     "研究伦理说明：所有问卷数据仅作聚合统计与学位论文撰写，不收集任何可识别个人信息。"
