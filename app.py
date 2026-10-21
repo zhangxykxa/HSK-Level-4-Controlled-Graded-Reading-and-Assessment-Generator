@@ -239,6 +239,40 @@ def _build_syllabus_dicts(vocab_df):
     return word_meta, syllable_words, syllable_chars
 
 
+def _merge_unmatched_cjk_runs(tokens, max_run_len: int = 4):
+    """把「连续未命中大纲」的汉字片段合并为一个候选词。
+
+    最大匹配只认大纲词，遇到「展览」「享受」这类超纲词会逐字切开，
+    使超纲词表里出现「览」「享」这种不成立的单字。此处对切分结果做一次
+    后处理，把相邻的未命中汉字重新合并成候选词（上限 ``max_run_len`` 个汉字），
+    让超纲词以「词」而非「字」的形式呈现。
+
+    合并不改变覆盖率：未命中片段在覆盖率里本就按「命中单字比例」折算，
+    合并前后分子分母同比例缩放，结果一致。
+
+    Args:
+        tokens: ``_max_match_tokenize`` 的输出，元素为 (token, 是否命中大纲词)
+        max_run_len: 单个合并候选词最多包含的汉字数
+    """
+    merged = []
+    buf = ""  # 累积中的连续未命中汉字
+    for tok, hit in tokens:
+        is_unmatched_single_cjk = not hit and len(tok) == 1 and _is_cjk_char(tok)
+        if is_unmatched_single_cjk:
+            if len(buf) >= max_run_len:
+                merged.append((buf, False))
+                buf = ""
+            buf += tok
+            continue
+        if buf:
+            merged.append((buf, False))
+            buf = ""
+        merged.append((tok, hit))
+    if buf:
+        merged.append((buf, False))
+    return merged
+
+
 def _max_match_tokenize(text: str, syllable_words):
     """基于「大纲词集合」的最大匹配切分。
 
@@ -283,7 +317,8 @@ def _max_match_tokenize(text: str, syllable_words):
             # 单独一个汉字：作为单字 token，后续再判断是否在 syllable_chars 里
             tokens.append((ch, False))
             i += 1
-    return tokens
+    # 后处理：把连续未命中的汉字合并回候选词，避免超纲词被拆成单字
+    return _merge_unmatched_cjk_runs(tokens)
 
 
 def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
@@ -437,105 +472,113 @@ def _html_escape(s: str) -> str:
 
 
 def render_compliance_report(analysis: dict):
-    """把 analyze_reading_compliance 的结果渲染为 st.expander 卡片。"""
-    with st.expander("📊 本文 HSK 4 大纲合规度检测分析报告", expanded=True):
-        # 指标卡片：每行 4 列
+    """把 analyze_reading_compliance 的结果渲染为 st.expander 卡片。
+
+    排版策略：默认收起，避免长期占据正文区；展开后 4 个核心指标单行横向展示，
+    详细内容按「正文高亮 / 超纲词列表 / 核心词融入」切分到三个标签页。
+    """
+    with st.expander("📊 本文 HSK 4 大纲合规度检测分析报告", expanded=False):
+        # —— 核心指标：单行 4 列横向展示 ——
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
         total_chars = analysis["total_cjk_chars"]
         with kpi1:
             # 字数目标 250–350
-            ok = 250 <= total_chars <= 350
-            delta = ""
+            ok_len = 250 <= total_chars <= 350
             if total_chars < 250:
-                delta = f"偏短，距离下限还需 {250 - total_chars} 字"
+                delta_len = f"偏短，距离下限还需 {250 - total_chars} 字"
             elif total_chars > 350:
-                delta = f"偏长，超出上限 {total_chars - 350} 字"
+                delta_len = f"偏长，超出上限 {total_chars - 350} 字"
             else:
-                delta = "在 250–350 字目标范围内 ✅"
+                delta_len = "在 250–350 字目标范围内 ✅"
             st.metric(
                 "总字数 (Total Characters)",
                 f"{total_chars} 字",
-                delta=delta,
-                delta_color="normal" if ok else "inverse",
+                delta=delta_len,
+                delta_color="normal" if ok_len else "inverse",
             )
+
+        cov = analysis["syllabus_coverage_pct"]
         with kpi2:
-            pct = analysis["target_integration_pct"]
-            st.metric(
-                "核心词融入率 (Target Integration)",
-                f"{pct}%  ({analysis['target_hit_count']}/{analysis['target_total']})",
-                delta="✅ 5/5 全部命中" if analysis["all_targets_hit"] else "⚠️ 仍有缺失核心词",
-                delta_color="normal" if analysis["all_targets_hit"] else "inverse",
-            )
-        with kpi3:
-            cov = analysis["syllabus_coverage_pct"]
             ok95 = cov >= 95
             st.metric(
                 "大纲词汇覆盖率 (Lexical Coverage)",
                 f"{cov}%",
-                delta=f"{'≥ 95% (Laufer 1989 阈值 ✅)' if ok95 else '< 95% 建议调整'}"
+                delta="≥ 95% (Laufer 1989 阈值 ✅)" if ok95 else "< 95% 建议调整",
+                delta_color="normal" if ok95 else "inverse",
             )
+
+        with kpi3:
+            pct = analysis["target_integration_pct"]
+            st.metric(
+                "核心词融入率 (Target Integration)",
+                f"{pct}%  ({analysis['target_hit_count']}/{analysis['target_total']})",
+                delta="✅ 全部命中" if analysis["all_targets_hit"] else "⚠️ 仍有缺失核心词",
+                delta_color="normal" if analysis["all_targets_hit"] else "inverse",
+            )
+
+        oos_words = analysis["out_of_syllabus_words"]
         with kpi4:
-            oosn = len(analysis["out_of_syllabus_words"])
             st.metric(
                 "疑似超纲生词 (Out-of-Syllabus)",
-                f"{oosn} 个",
-                delta=None,
+                f"{len(oos_words)} 个",
+                delta="✅ 无超纲词" if not oos_words else "见「超纲词列表」标签页",
+                delta_color="normal" if not oos_words else "inverse",
             )
 
         st.markdown("---")
 
-        # 子报告 A：核心词融入检查
-        st.markdown("### 🎯 核心词融入逐项检查")
-        if analysis["target_words"]:
-            rows_per = 4
-            chunks = [
-                analysis["target_words"][i : i + rows_per]
-                for i in range(0, len(analysis["target_words"]), rows_per)
-            ]
-            for chunk in chunks:
-                cols = st.columns(rows_per)
-                for col, tw in zip(cols, chunk):
-                    with col:
-                        with st.container(border=True):
-                            status = "✅ 命中" if tw["hit"] else "❌ 未命中"
-                            st.markdown(f"#### {tw['word']} {status}")
-                            st.caption(
-                                f"{tw['pinyin']} · {tw['pos']}"
-                                if tw["pinyin"] or tw["pos"]
-                                else " "
-                            )
-                            st.write(tw["definition"] or "")
-        else:
-            st.info("当前锁定词汇为空，跳过核心词融入率展示。")
+        # —— 详细内容按标签页切分，减少纵向堆叠 ——
+        tab_hl, tab_oos, tab_target = st.tabs(
+            ["📖 正文高亮", "⚠️ 超纲词列表", "🎯 核心词融入"]
+        )
 
-        st.markdown("---")
-
-        # 子报告 B：高亮版正文 + 超纲生词表
-        left_a, right_a = st.columns([2, 1])
-        with left_a:
-            st.markdown("### 📖 正文（橙色下划线标注疑似超纲词）")
+        # 标签页 1：高亮正文
+        with tab_hl:
+            st.caption("橙色下划线 = 疑似超纲词")
             st.markdown(
                 f'<div style="line-height:2;font-size:16px;padding:12px 14px;border:1px solid #eee;border-radius:8px;background:#fff;">{analysis["highlighted_html"]}</div>',
                 unsafe_allow_html=True,
             )
-        with right_a:
-            st.markdown("### ⚠️ 疑似超纲生词卡")
-            if not analysis["out_of_syllabus_words"]:
+
+        # 标签页 2：超纲生词卡
+        with tab_oos:
+            if not oos_words:
                 st.success("🎉 未检测到疑似超纲词，完全在大纲字表内！")
             else:
-                for w in analysis["out_of_syllabus_words"]:
+                for w in oos_words:
                     with st.container(border=True):
-                        sub = []
-                        if w["pinyin"]:
-                            sub.append(w["pinyin"])
-                        if w["pos"]:
-                            sub.append(w["pos"])
                         st.markdown(f"**{w['word']}**")
+                        sub = [s for s in (w["pinyin"], w["pos"]) if s]
                         if sub:
                             st.caption(" · ".join(sub))
                         if w["definition"]:
                             st.write(w["definition"])
                         st.caption(f"出现次数：{w['count']}")
+
+        # 标签页 3：核心词融入逐项检查
+        with tab_target:
+            if not analysis["target_words"]:
+                st.info("当前锁定词汇为空，跳过核心词融入率展示。")
+            else:
+                rows_per = 4
+                chunks = [
+                    analysis["target_words"][i : i + rows_per]
+                    for i in range(0, len(analysis["target_words"]), rows_per)
+                ]
+                for chunk in chunks:
+                    cols = st.columns(rows_per)
+                    for col, tw in zip(cols, chunk):
+                        with col:
+                            with st.container(border=True):
+                                status = "✅ 命中" if tw["hit"] else "❌ 未命中"
+                                st.markdown(f"#### {tw['word']} {status}")
+                                st.caption(
+                                    f"{tw['pinyin']} · {tw['pos']}"
+                                    if tw["pinyin"] or tw["pos"]
+                                    else " "
+                                )
+                                st.write(tw["definition"] or "")
 
         # 学术注释
         st.markdown("---")
@@ -631,9 +674,11 @@ def build_lesson_plan_markdown(
 
             def _esc(s):
                 return (s or "").replace("|", "\\|").replace("\n", " ")
+            # 空值统一填「—」，避免导出表格出现视觉留白
             lines.append(
-                f"| {idx2} | {_esc(w['word'])} | {_esc(w['pinyin'])} "
-                f"| {_esc(w['pos'])} | {_esc(w['definition'])} | {w['count']} |"
+                f"| {idx2} | {_esc(w['word'])} | {_esc(w['pinyin']) or '—'} "
+                f"| {_esc(w['pos']) or '—'} | {_esc(w['definition']) or '—'} "
+                f"| {w['count']} |"
             )
     lines.append("")
     lines.append("---")
@@ -1141,32 +1186,49 @@ def generate_mcq(api_key, base_url, model, messages, temperature=0.5) -> str:
     return resp.choices[0].message.content or ""
 
 
+def _clean_json_text(raw: str) -> str:
+    """清洗大模型返回文本，并提取最外层 JSON 主体。
+
+    依次处理：
+    1. 去掉首尾 Markdown 代码围栏（```json / ```），忽略大小写；
+    2. 截取最外层 ``{...}`` 或 ``[...]`` —— 取两者中先出现的那个容器。
+
+    用于所有需要稳健解析 LLM JSON 输出的场景。
+    """
+    import re
+
+    text = (raw or "").strip()
+    # 1) 强清洗 Markdown 围栏
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"\s*```$", "", text).strip()
+
+    # 2) 提取最外层容器：对象优先按出现位置取舍，兼容两种返回形态
+    obj_start, obj_end = text.find("{"), text.rfind("}")
+    arr_start, arr_end = text.find("["), text.rfind("]")
+    has_obj = obj_start != -1 and obj_end > obj_start
+    has_arr = arr_start != -1 and arr_end > arr_start
+    if has_obj and (not has_arr or obj_start < arr_start):
+        return text[obj_start : obj_end + 1]
+    if has_arr:
+        return text[arr_start : arr_end + 1]
+    return text
+
+
 def parse_mcq_json(raw: str) -> list[dict]:
     """从大模型返回文本中稳健解析 MCQ JSON 数组。
 
     逐级容错，确保不因 Markdown 围栏（```json / ```）或前后缀说明文字而崩溃：
-    1. 强清洗首尾 Markdown 围栏（忽略大小写）；
-    2. 截取首个 ``[`` 与末个 ``]`` 之间的主体；
-    3. ``json.loads`` 失败时，用正则 ``\\[.*\\]``（re.DOTALL）兜底提取最外层数组；
-    4. 仍失败则返回空列表，由调用方展示原始返回内容。
+    1. 强清洗首尾 Markdown 围栏并提取最外层数组（见 :func:`_clean_json_text`）；
+    2. ``json.loads`` 失败时，用正则 ``\\[.*\\]``（re.DOTALL）兜底提取最外层数组；
+    3. 仍失败则返回空列表，由调用方展示原始返回内容。
     最后逐题做结构校验，仅保留合法题目。
     """
     import json
     import re
 
-    text = (raw or "").strip()
+    text = _clean_json_text(raw)
 
-    # 1) 强清洗 Markdown 围栏：首部 ```json / ```，尾部 ```
-    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
-    text = re.sub(r"\s*```$", "", text).strip()
-
-    # 2) 截取首个 '[' 到末个 ']' 之间的主体
-    start = text.find("[")
-    end = text.rfind("]")
-    if start != -1 and end != -1 and end > start:
-        text = text[start : end + 1]
-
-    # 3) 解析；失败则正则兜底提取最外层数组
+    # 解析；失败则正则兜底提取最外层数组
     data = None
     try:
         data = json.loads(text)
@@ -1195,6 +1257,68 @@ def parse_mcq_json(raw: str) -> list[dict]:
         ):
             valid.append(item)
     return valid
+
+
+def enrich_oos_words(api_key, base_url, model, words) -> dict:
+    """调用大模型，为「疑似超纲词」补全拼音 / 词性 / 简短英文释义。
+
+    用于填补导出教案中「附：文章中疑似超纲生词」表格的空白单元格 —— 这些词
+    不在 HSK 大纲词表内，无法从本地词库取到元信息，只能在生成文章后调用一次
+    大模型补全。
+
+    任何失败（网络异常 / 401 / 402 / 返回非法 JSON）都静默返回空字典，
+    由调用方降级使用原有的字级信息，不阻塞主流程。
+
+    Returns:
+        dict[str, dict]：``{词: {"pinyin": str, "pos": str, "definition": str}}``
+    """
+    import json
+
+    uniq_words = [w for w in dict.fromkeys(words or []) if w]
+    if not uniq_words:
+        return {}
+
+    prompt = (
+        "你是国际中文教学词典助手。请为下列中文词语补充语言学信息。\n"
+        f"词语列表：{'、'.join(uniq_words)}\n\n"
+        "要求：\n"
+        "1. 拼音：带声调的汉语拼音（如「展览」→ zhǎn lǎn）；\n"
+        "2. 词性：中文词性缩写（如 名 / 动 / 形 / 副）；\n"
+        "3. 释义：不超过 20 个字符的简明英文释义；\n"
+        "4. 若某项不是独立词语，按最接近的整体表达给出信息。\n\n"
+        "严格只输出如下 JSON 对象，不要任何额外文字或 Markdown 代码围栏：\n"
+        '{"展览": {"pinyin": "zhǎn lǎn", "pos": "名", "definition": "exhibition"}, '
+        '"享受": {"pinyin": "xiǎng shòu", "pos": "动", "definition": "to enjoy"}}'
+    )
+
+    try:
+        client = openai.OpenAI(api_key=api_key, base_url=base_url or None)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "你是国际中文教学词典助手，只输出规范 JSON。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            stream=False,
+        )
+        data = json.loads(_clean_json_text(resp.choices[0].message.content or ""))
+    except Exception:
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    enriched = {}
+    for w in uniq_words:
+        info = data.get(w)
+        if isinstance(info, dict):
+            enriched[w] = {
+                "pinyin": str(info.get("pinyin", "") or "").strip(),
+                "pos": str(info.get("pos", "") or "").strip(),
+                "definition": str(info.get("definition", "") or "").strip(),
+            }
+    return enriched
 
 
 # ============================================================================
@@ -1501,6 +1625,28 @@ with col1:
                         compliance = analyze_reading_compliance(
                             text, locked_words, vocab_df
                         )
+                        # —— 超纲词元信息补全：此处只调用一次大模型，
+                        #    结果写入 compliance 并由 session_state 持久化；
+                        #    导出的 Markdown 教案直接读取，不再重复请求。
+                        _oos_names = [
+                            w["word"] for w in compliance["out_of_syllabus_words"]
+                        ]
+                        _enriched = enrich_oos_words(
+                            api_key_r, base_url_r, model_r, _oos_names
+                        )
+                        for w in compliance["out_of_syllabus_words"]:
+                            info = _enriched.get(w["word"])
+                            if info:
+                                w["pinyin"] = info["pinyin"] or w["pinyin"]
+                                w["pos"] = info["pos"] or w["pos"]
+                                w["definition"] = (
+                                    info["definition"] or w["definition"]
+                                )
+                        if _oos_names and not _enriched:
+                            st.caption(
+                                "ℹ️ 超纲词释义补全未成功（可能是 API 余额或网络问题），"
+                                "已回退为字级信息。"
+                            )
                         st.session_state["compliance_analysis"] = compliance
                         st.success("✨ 文章生成成功！")
                         st.markdown("---")
