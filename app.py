@@ -974,20 +974,8 @@ def _resolve_api_config(api_key_input, base_url_input, model_input, provider_lab
     return _clean_token(raw_key), _clean_base_url(raw_url), _clean_token(raw_model)
 
 
-def build_generation_messages(
-    words_df: pd.DataFrame,
-    topic_label: str,
-    syllabus_version: str,
-    char_limit: int,
-) -> list[dict]:
-    """组装分级阅读生成的 System / User 提示词。
-
-    将大纲版本、教学主题、字数限制与锁定的核心词汇列表（含拼音、词性、
-    释义）一并注入 System Prompt，约束模型在 HSK 1–4 级词汇范围内创作，
-    并在文末附「核心词回顾」。
-    """
-    topic = _map_topic(topic_label)
-    version_short = "2.0" if "2.0" in syllabus_version else "3.0"
+def _format_locked_words_for_prompt(words_df: pd.DataFrame) -> list[str]:
+    """将锁定词 DataFrame 格式化为适合 Prompt 注入的文本列表。"""
     word_list = []
     if words_df is not None and not words_df.empty:
         for _, r in words_df.iterrows():
@@ -995,25 +983,56 @@ def build_generation_messages(
                 f"{r['Word']}（{r.get('Pinyin', '')}，{r.get('POS', '')}："
                 f"{r.get('Definition', '')}）"
             )
-    vocab_block = "\n".join(f"- {w}" for w in word_list) if word_list else "- （无）"
+    return word_list
 
-    system_prompt = f"""你是一名资深的国际中文教师与分级阅读材料编写专家，精通 HSK（汉语水平考试）词汇大纲，专精「受控文本生成（Controlled Text Generation, CTG）」。请严格依据以下硬约束，生成一篇适合 HSK 4 级学习者的中文分级阅读短文。
+
+def build_ctg_prompt(
+    syllabus_version: str,
+    topic_label: str,
+    char_limit: int,
+    locked_words_str: str,
+    target_word_count: int,
+) -> str:
+    """按 CTG 约束组装阅读生成 Prompt。"""
+    topic = _map_topic(topic_label)
+    version_short = "2.0" if "2.0" in syllabus_version else "3.0"
+
+    return f"""你是一名资深的国际中文教师与分级阅读材料编写专家，精通 HSK（汉语水平考试）词汇大纲，专精「受控文本生成（Controlled Text Generation, CTG）」。请严格依据以下硬约束，生成一篇适合 HSK 4 级学习者的中文分级阅读短文。
 
 【大纲版本】HSK {version_short}
 【教学主题】{topic}
 【目标字数】{char_limit} 个汉字（允许 ±10% 浮动）
-【受控词汇白名单（核心词，必须 100% 融入）】以下 {len(word_list)} 个 HSK 4 级目标词，须自然、准确地融入文中（可变形，但不得改变词义核心）：
-{vocab_block}
+【受控词汇白名单（核心词，必须 100% 融入）】以下 {target_word_count} 个 HSK 4 级目标词，须自然、准确地融入文中（可变形，但不得改变词义核心）：
+{locked_words_str}
 
 【受控生成硬约束（必须全部满足）】
 1. 词汇受控：正文用词须落在 HSK 1–4 级大纲范围内，严禁使用 HSK 5/6 级或大纲外超纲词。
-2. 核心词全覆盖：上述 {len(word_list)} 个核心词必须全部出现，缺一不可。
+2. 核心词全覆盖：上述 {target_word_count} 个核心词必须全部出现，缺一不可。
 3. 字数受控：正文汉字数严格控制在 {char_limit} 字附近（±10% 以内）。
 4. 主题受控：内容必须紧扣「{topic}」主题，情节完整、逻辑连贯、贴近真实生活。
 5. 难度受控：句式多样但规范，避免过长嵌套，适合中级学习者阅读。
 6. 输出受控：先输出短文正文，再以「核心词回顾」列表复现全部核心词（词 + 拼音 + 简释）；除此之外不得输出任何额外解释、标题编号、Markdown 标题或英文翻译。
 
 现在请开始创作。"""
+
+
+def build_generation_messages(
+    words_df: pd.DataFrame,
+    topic_label: str,
+    syllabus_version: str,
+    char_limit: int,
+) -> list[dict]:
+    """组装分级阅读生成的 System / User 提示词。"""
+    word_list = _format_locked_words_for_prompt(words_df)
+    locked_words_str = "\n".join(f"- {w}" for w in word_list) if word_list else "- （无）"
+    system_prompt = build_ctg_prompt(
+        syllabus_version,
+        topic_label,
+        char_limit,
+        locked_words_str,
+        len(word_list),
+    )
+
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": "请直接输出分级阅读短文。"},
@@ -1042,26 +1061,13 @@ def stream_reading_text(api_key, base_url, model, messages, temperature=0.7):
 # MCQ（四选一阅读理解单选题）生成
 # ----------------------------------------------------------------------------
 
-def build_mcq_messages(
+def build_aqg_prompt(
     article_text: str,
-    words_df: pd.DataFrame,
+    locked_words_str: str,
     num_questions: int = 2,
-) -> list[dict]:
-    """组装 MCQ 生成的 System / User 提示词。
-
-    要求大模型针对文章核心事实或目标词汇，出 ``num_questions`` 道四选一
-    阅读理解题。严格约束干扰项须具备迷惑性，并以 JSON 格式返回。
-    """
-    word_list = []
-    if words_df is not None and not words_df.empty:
-        for _, r in words_df.iterrows():
-            word_list.append(
-                f"{r['Word']}（{r.get('Pinyin', '')}，{r.get('POS', '')}："
-                f"{r.get('Definition', '')}）"
-            )
-    vocab_block = "\n".join(f"- {w}" for w in word_list) if word_list else "- （无）"
-
-    system_prompt = f"""你是一名国际汉语教学测评专家，专精「自动命题（Automatic Question Generation, AQG）」与「干扰项对齐（Distractor Alignment）」，擅长为 HSK 4 级学习者设计高质量的阅读理解单项选择题（MCQ）。
+) -> str:
+    """按 AQG 与干扰项对齐约束组装 MCQ Prompt。"""
+    return f"""你是一名国际汉语教学测评专家，专精「自动命题（Automatic Question Generation, AQG）」与「干扰项对齐（Distractor Alignment）」，擅长为 HSK 4 级学习者设计高质量的阅读理解单项选择题（MCQ）。
 
 请基于下列文章与目标词汇，出 {num_questions} 道四选一阅读理解题。
 
@@ -1069,7 +1075,7 @@ def build_mcq_messages(
 {article_text}
 
 【目标词汇（HSK 4 级）】
-{vocab_block}
+{locked_words_str}
 
 【命题要求】
 1. 设问须针对文章核心事实或目标词汇的用法/含义，避免考查无关细节。
@@ -1098,6 +1104,18 @@ def build_mcq_messages(
     "explanation": "正确答案为A，因为……；B/C/D不正确，因为……。"
   }}
 ]"""
+
+
+def build_mcq_messages(
+    article_text: str,
+    words_df: pd.DataFrame,
+    num_questions: int = 2,
+) -> list[dict]:
+    """组装 MCQ 生成的 System / User 提示词。"""
+    word_list = _format_locked_words_for_prompt(words_df)
+    locked_words_str = "\n".join(f"- {w}" for w in word_list) if word_list else "- （无）"
+    system_prompt = build_aqg_prompt(article_text, locked_words_str, num_questions)
+
     return [
         {"role": "system", "content": system_prompt},
         {
@@ -1140,7 +1158,7 @@ def parse_mcq_json(raw: str) -> list[dict]:
 
     # 1) 强清洗 Markdown 围栏：首部 ```json / ```，尾部 ```
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE).strip()
-    text = re.sub(r"```$", "", text).strip()
+    text = re.sub(r"\s*```$", "", text).strip()
 
     # 2) 截取首个 '[' 到末个 ']' 之间的主体
     start = text.find("[")
