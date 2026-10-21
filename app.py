@@ -23,12 +23,45 @@ hide_streamlit_style = """
     [data-testid="stMetricLabel"] {font-size: 0.92rem !important;}
     [data-testid="stMetricValue"] {font-size: 2.2rem !important;}
     [data-testid="stMetricDelta"] {font-size: 0.95rem !important;}
+    /* —— 右下角悬浮快捷工具栏（Floating Action Bar）—— */
+    .hsk-fab {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 99999;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    .hsk-fab a {
+      display: inline-block;
+      padding: 9px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.2;
+      text-decoration: none !important;
+      background: rgba(255, 255, 255, 0.97);
+      color: #1f2937 !important;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+      white-space: nowrap;
+    }
+    .hsk-fab a:hover { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2); }
+    .hsk-fab a.primary {
+      background: #FF4B4B;
+      color: #ffffff !important;
+      border-color: #FF4B4B;
+    }
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 st.title("📚 HSK 4 级受控分级阅读与测评生成器")
 st.subheader("Curriculum-Adaptive Reading & Exercise Generator (HSK 2.0 vs 3.0)")
+# 悬浮工具栏「回到顶部」的锚点
+st.markdown('<div id="hsk-top"></div>', unsafe_allow_html=True)
 st.write("---")
 
 # ============================================================================
@@ -138,9 +171,15 @@ def _combo_seed(syllabus_version: str, topic_label: str, n: int) -> int:
     return int.from_bytes(hashlib.md5(sig.encode("utf-8")).digest()[:4], "big")
 
 
-def render_locked_words(words_df: pd.DataFrame, topic_label: str) -> None:
-    """在主界面上展示「当前锁定的教学词汇」。"""
-    st.subheader("📌 当前锁定的教学词汇 (Locked Target Vocabulary)")
+def render_locked_words(
+    words_df: pd.DataFrame, topic_label: str, columns_per_row: int = 5
+) -> None:
+    """展示「当前锁定的教学词汇」。
+
+    Args:
+        columns_per_row: 每行词卡数。左栏（窄栏）传 1，宽栏可传 5。
+    """
+    st.markdown("#### 📌 当前锁定的教学词汇")
 
     if words_df is None or words_df.empty:
         st.info(
@@ -153,8 +192,8 @@ def render_locked_words(words_df: pd.DataFrame, topic_label: str) -> None:
         f"主题：{_map_topic(topic_label)} ｜ 已锁定 {len(words_df)} 个 HSK 4 级目标词汇"
     )
 
-    # —— 卡片式展示：每行 5 个词卡，尽量压缩首页纵向高度 ——
-    cards_per_row = 5
+    # —— 卡片式展示：每行词卡数由可用宽度决定 ——
+    cards_per_row = max(1, int(columns_per_row))
     show_cols = ["Word", "Pinyin", "POS", "Definition"]
     rows = [words_df.iloc[i : i + cards_per_row] for i in range(0, len(words_df), cards_per_row)]
     for row in rows:
@@ -396,12 +435,14 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
             html_parts.append(_html_escape(tok))
             continue
 
-        # 没命中词，但单字全在 syllable_chars 里，也视为命中大纲（字级别兜底）
+        # 单字：以「字是否在大纲字表内」兜底判断命中（覆盖率照实统计），
+        # 但无论是否命中都**不做超纲高亮** —— 未命中的单字多半只是分词碎片
+        # （如「死亡」的「亡」、「特殊」的「殊」），单独标注对备课没有教学意义。
         if len(tok) == 1:
             if tok in syllable_chars:
                 syllabus_hit_count += 1
-                html_parts.append(_html_escape(tok))
-                continue
+            html_parts.append(_html_escape(tok))
+            continue
         else:
             # 多字词拆分单字判断——如果全部 CJK 字都在大纲里，认为这些字「不超纲」，
             # 仅记一次「该多字组合未出现在大纲」，但覆盖率里按（命中单字的比例）算。
@@ -432,7 +473,10 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
                 segs.append((seg_buf, seg_is_oos))
 
             for seg, is_oos_seg in segs:
-                if not is_oos_seg:
+                seg_cjk_n = sum(1 for c in seg if _is_cjk_char(c))
+                # 只把「连续 ≥2 个汉字」的超纲片段标为疑似超纲词：
+                # 单字片段（如「殊」）几乎都是分词碎片，高亮出来只会像在乱断字。
+                if (not is_oos_seg) or seg_cjk_n < 2:
                     html_parts.append(_html_escape(seg))
                     continue
                 if seg not in oos_seen:
@@ -1512,6 +1556,32 @@ target_vocab_count = st.sidebar.slider("4. 融入核心词数量 (Target Vocabul
 if st.sidebar.button("🔄 重新随机锁定 (Reshuffle)", use_container_width=True):
     st.session_state["lock_seed"] = st.session_state.get("lock_seed", 0) + 1
 
+# --- 大纲锁定区（左栏固定）：加载词库 -> 按主题+级别随机筛选 -> 展示 ---
+with st.sidebar:
+    st.write("---")
+    # 加载当前大纲词库（缓存，切换版本自动重载）
+    try:
+        vocab_df = load_vocab(syllabus_version)
+    except Exception as e:
+        st.error(
+            f"❌ 词汇表加载失败：{e}\n\n"
+            "请确保仓库根目录下存在对应的 CSV 文件。"
+        )
+        st.stop()
+
+    # 组合（大纲/主题/词数）变化时，重置「重新随机」计数器
+    combo_sig = _combo_seed(syllabus_version, theme_choice, target_vocab_count)
+    if st.session_state.get("locked_sig") != combo_sig:
+        st.session_state["locked_sig"] = combo_sig
+        st.session_state["lock_seed"] = 0
+
+    # 有效种子 = 组合种子 + 重新随机计数；同一组合结果稳定，点「重新随机」换一组
+    effective_seed = combo_sig + st.session_state.get("lock_seed", 0)
+    locked_words = select_target_words(
+        vocab_df, theme_choice, target_vocab_count, random_seed=effective_seed
+    )
+    render_locked_words(locked_words, theme_choice, columns_per_row=1)
+
 # --- 大模型 API 配置（云端 secrets 优先，侧边栏手动输入兜底）---
 st.sidebar.markdown("### 🤖 大模型 API 配置")
 
@@ -1656,34 +1726,6 @@ st.sidebar.link_button(
 st.sidebar.caption(
     "研究伦理说明：所有问卷数据仅作聚合统计与学位论文撰写，不收集任何可识别个人信息。"
 )
-
-# ============================================================================
-# 锁定教学词汇：加载词库 -> 按主题+级别随机筛选 -> 主界面展示
-# ============================================================================
-# 加载当前大纲词库（缓存，切换版本自动重载）
-try:
-    vocab_df = load_vocab(syllabus_version)
-except Exception as e:
-    st.error(
-        f"❌ 词汇表加载失败：{e}\n\n"
-        "请确保仓库根目录下存在对应的 CSV 文件。"
-    )
-    st.stop()
-
-# 组合（大纲/主题/词数）变化时，重置「重新随机」计数器
-combo_sig = _combo_seed(syllabus_version, theme_choice, target_vocab_count)
-if st.session_state.get("locked_sig") != combo_sig:
-    st.session_state["locked_sig"] = combo_sig
-    st.session_state["lock_seed"] = 0
-
-# 有效种子 = 组合种子 + 重新随机计数；同一组合结果稳定，点「重新随机」换一组
-effective_seed = combo_sig + st.session_state.get("lock_seed", 0)
-locked_words = select_target_words(
-    vocab_df, theme_choice, target_vocab_count, random_seed=effective_seed
-)
-render_locked_words(locked_words, theme_choice)
-
-st.write("---")
 
 # ============================================================================
 # 3. 主界面布局 - 左右分栏
@@ -1980,6 +2022,7 @@ with export_zone:
     _txt = st.session_state.get("generated_text", "")
     _mcq = st.session_state.get("mcq_questions") or []
     _cmp = st.session_state.get("compliance_analysis")
+    _fab_export_link = ""  # 悬浮工具栏的「导出教案」快捷入口（尚未生成文章时留空）
     if not _txt:
         st.info(
             "👆 上方尚未生成分级阅读短文，请先在左侧点击「🚀 一键生成 HSK 4 级阅读」。"
@@ -2002,6 +2045,14 @@ with export_zone:
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d_%H%M")
         fname = f"HSK4_Lesson_Plan_{topic_slug}_{ts}.md"
+
+        # —— 供右下角悬浮工具栏使用：把教案内联成 data URL，点一下即可下载 ——
+        import base64
+        _md_b64 = base64.b64encode(md_data.encode("utf-8-sig")).decode("ascii")
+        _fab_export_link = (
+            f'<a class="primary" download="{fname}" '
+            f'href="data:text/markdown;charset=utf-8;base64,{_md_b64}">🧾 一键导出教案</a>'
+        )
 
         left_btn, right_hint = st.columns([3, 2])
         with left_btn:
@@ -2027,3 +2078,12 @@ with export_zone:
                 f"- ❓ 选择题：**{len(_mcq)}** 道 {mcq_ok}\n"
                 f"- 📊 合规度分析：{cmp_ok}"
             )
+
+    # —— 右下角悬浮快捷工具栏（Floating Action Bar）：随时可回到顶部 / 一键导出教案 ——
+    st.markdown(
+        '<div class="hsk-fab">'
+        '<a href="#hsk-top">⬆️ 回到顶部</a>'
+        f"{_fab_export_link}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
