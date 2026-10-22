@@ -1,6 +1,7 @@
 import hashlib
 import os
 import random
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -17,12 +18,46 @@ hide_streamlit_style = """
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .viewerBadge_container__17vsn {display: none !important;}
-    .block-container {padding-top: 0.85rem; padding-bottom: 1.6rem;}
-    h1 {margin-bottom: 0.1rem !important;}
-    h2, h3 {margin-top: 0.15rem !important; margin-bottom: 0.25rem !important;}
+    .block-container {padding-top: 0.55rem; padding-bottom: 1.3rem;}
+    h1 {margin-top: 0 !important; margin-bottom: 0.05rem !important; font-size: 2.2rem !important;}
+    h2, h3 {margin-top: 0.1rem !important; margin-bottom: 0.2rem !important;}
+    div[data-testid="stHeadingWithActionElements"] h3 {font-size: 1.6rem !important;}
+    [data-testid="stMarkdownContainer"] p {margin-bottom: 0.45rem;}
     [data-testid="stMetricLabel"] {font-size: 0.92rem !important;}
     [data-testid="stMetricValue"] {font-size: 2.2rem !important;}
     [data-testid="stMetricDelta"] {font-size: 0.95rem !important;}
+    /* —— 侧边栏收起/展开控件：固定在侧边中部，避免滚动后跑到顶部 —— */
+    section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
+      position: sticky !important;
+      top: 50vh !important;
+      left: 100%;
+      transform: translate(55%, -50%);
+      z-index: 100001 !important;
+      background: rgba(255,255,255,0.96) !important;
+      border: 1px solid #e5e7eb !important;
+      border-radius: 999px !important;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button {
+      border-radius: 999px !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] {
+      position: fixed !important;
+      left: 10px !important;
+      top: 50vh !important;
+      transform: translateY(-50%) !important;
+      z-index: 100001 !important;
+      background: transparent !important;
+      border: none !important;
+      box-shadow: none !important;
+      padding: 0 !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] button {
+      background: rgba(255,255,255,0.96) !important;
+      border: 1px solid #e5e7eb !important;
+      border-radius: 999px !important;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important;
+    }
     /* —— 右下角悬浮快捷工具栏（Floating Action Bar）—— */
     .hsk-fab {
       position: fixed;
@@ -62,7 +97,10 @@ st.title("📚 HSK 4 级受控分级阅读与测评生成器")
 st.subheader("Curriculum-Adaptive Reading & Exercise Generator (HSK 2.0 vs 3.0)")
 # 悬浮工具栏「回到顶部」的锚点
 st.markdown('<div id="hsk-top"></div>', unsafe_allow_html=True)
-st.write("---")
+st.markdown(
+    '<div style="margin:0.1rem 0 0.55rem 0;border-top:1px solid #ececec;"></div>',
+    unsafe_allow_html=True,
+)
 
 # ============================================================================
 # 词汇表配置与核心函数
@@ -77,6 +115,16 @@ VOCAB_FILES = {
 REPO_ROOT = Path(__file__).resolve().parent
 # 仅锁定 HSK 4 级目标词汇（CSV 中含 1~4 级，需按级别筛选）
 TARGET_LEVEL_KEYWORD = "Level 4"
+
+
+def _format_generation_time() -> str:
+    """生成时间统一按香港时区格式化到分钟，便于实验记录。"""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("Asia/Hong_Kong")).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def _map_topic(topic_label: str) -> str:
@@ -759,7 +807,7 @@ def render_compliance_report(analysis: dict):
                 st.caption("「复现次数」= 该目标词在正文中出现的次数（按词边界计数）")
                 for tw in analysis["target_words"]:
                     with st.container(border=True):
-                        c1, c2, c3, c4, c5 = st.columns([1.2, 1.1, 0.9, 1.6, 3.0])
+                        c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.0, 0.8, 1.2, 1.0, 2.8])
                         with c1:
                             st.markdown(f"**{tw['word']}**")
                         with c2:
@@ -768,11 +816,10 @@ def render_compliance_report(analysis: dict):
                         with c3:
                             st.caption(f"{tw.get('occurrences', 0)} 次")
                         with c4:
-                            meta = " · ".join(
-                                [x for x in (tw["pinyin"], tw["pos"]) if x]
-                            )
-                            st.caption(meta or "—")
+                            st.caption(tw["pinyin"] or "—")
                         with c5:
+                            st.caption(tw["pos"] or "—")
+                        with c6:
                             st.caption(tw["definition"] or "—")
 
         # 学术注释
@@ -801,19 +848,18 @@ def build_lesson_plan_markdown(
     mcq_questions,
     analysis=None,
     model_name: str = "",
+    generated_at: str = "",
 ):
     """将文章、生词卡、选择题 + 答案解析打包为一份 Markdown 教案。
 
     不引入任何额外依赖，仅字符串拼接；输出以 UTF-8 + BOM 编码，
     便于 Windows 下复制进 Word 或粘贴进 OneNote / Notion 不乱码。
     """
-    from datetime import datetime
-
     lines = []
     # 标题元数据
     lines.append("# HSK 4 分级阅读 · 教师备课教案讲义")
     lines.append("")
-    lines.append(f"- **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"- **生成时间**：{generated_at or _format_generation_time()}")
     lines.append(f"- **生成引擎**：{model_name or '（未记录）'}")
     lines.append(f"- **大纲版本**：{syllabus_version}")
     lines.append(f"- **主题**：{_map_topic(topic_label)}（{topic_label}）")
@@ -1938,6 +1984,7 @@ with col1:
                         # 记录本次生成引擎，供导出的教案 Metadata 使用
                         # （导出区每次 rerun 都会执行，不能直接依赖局部变量）
                         st.session_state["last_generation_model"] = model_r
+                        st.session_state["last_generated_at"] = _format_generation_time()
                         st.success("✨ 文章生成成功！")
                         st.markdown("---")
                         st.markdown("**💡 本轮锁定的核心词 (Vocabulary Tooltips):**")
@@ -2128,6 +2175,7 @@ with export_zone:
             mcq_questions=_mcq,
             analysis=_cmp,
             model_name=st.session_state.get("last_generation_model", ""),
+            generated_at=st.session_state.get("last_generated_at", ""),
         )
         # 文件名加时间戳，避免浏览器重名覆盖；主题英文名避免中文文件名部分浏览器下载变问号
         topic_slug = "".join(
