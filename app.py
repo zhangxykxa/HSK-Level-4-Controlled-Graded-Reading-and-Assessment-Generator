@@ -800,16 +800,21 @@ def build_lesson_plan_markdown(
     topic_label: str,
     mcq_questions,
     analysis=None,
+    model_name: str = "",
 ):
     """将文章、生词卡、选择题 + 答案解析打包为一份 Markdown 教案。
 
     不引入任何额外依赖，仅字符串拼接；输出以 UTF-8 + BOM 编码，
     便于 Windows 下复制进 Word 或粘贴进 OneNote / Notion 不乱码。
     """
+    from datetime import datetime
+
     lines = []
     # 标题元数据
     lines.append("# HSK 4 分级阅读 · 教师备课教案讲义")
     lines.append("")
+    lines.append(f"- **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"- **生成引擎**：{model_name or '（未记录）'}")
     lines.append(f"- **大纲版本**：{syllabus_version}")
     lines.append(f"- **主题**：{_map_topic(topic_label)}（{topic_label}）")
     if analysis:
@@ -1335,7 +1340,13 @@ def build_aqg_prompt(
    - 同形近：长度与句式与正确答案大体相当，避免畸长或畸短；
    - 同来源：优先取自文章中的近似表达、同义/近义表述，或目标词汇体系内的其他词；
    - 高迷惑：语法正确、语义合理，不得出现荒谬、无关或"一眼假"的选项；避免「全部/总是/绝不」等绝对化表述。
-4. 每题附上详细解析：说明正确答案为何正确，并逐一说明各干扰项为何不正确（引用文章原文或目标词汇释义）。
+4. 每题附上详细解析，包含两部分：
+   4.1 说明正确答案为何正确（引用文章原文或目标词汇释义）；
+   4.2 逐一注明各干扰项的「干扰逻辑」——即它靠什么迷惑学习者，须从下列标签中择一标注：
+       - 词性干扰：与正确答案词性相同、语义相近，仅在用法或搭配上不成立；
+       - 语意合理干扰：语义看似合理，但混淆了文章中的不同事实或对象；
+       - 原词干扰：直接取自文章中的近似表达，但对应的是另一个信息点；
+       - 形近干扰：用词与正确答案相近，但含义已偏离。
 5. 全部文本（题干、选项、解析）均为中文，难度控制在 HSK 4 级以内。
 
 【输出格式】
@@ -1351,7 +1362,7 @@ def build_aqg_prompt(
       "D": "选项D内容"
     }},
     "answer": "C",
-    "explanation": "正确答案为C，因为……；A/B/D不正确，因为……。"
+    "explanation": "正确答案为C，因为……（引用原文）。干扰项分析：A 为词性干扰，……；B 为语意合理干扰，……；D 为形近干扰，……。"
   }}
 ]"""
 
@@ -1924,6 +1935,9 @@ with col1:
                                 "已回退为字级信息。"
                             )
                         st.session_state["compliance_analysis"] = compliance
+                        # 记录本次生成引擎，供导出的教案 Metadata 使用
+                        # （导出区每次 rerun 都会执行，不能直接依赖局部变量）
+                        st.session_state["last_generation_model"] = model_r
                         st.success("✨ 文章生成成功！")
                         st.markdown("---")
                         st.markdown("**💡 本轮锁定的核心词 (Vocabulary Tooltips):**")
@@ -2113,6 +2127,7 @@ with export_zone:
             topic_label=theme_choice,
             mcq_questions=_mcq,
             analysis=_cmp,
+            model_name=st.session_state.get("last_generation_model", ""),
         )
         # 文件名加时间戳，避免浏览器重名覆盖；主题英文名避免中文文件名部分浏览器下载变问号
         topic_slug = "".join(
