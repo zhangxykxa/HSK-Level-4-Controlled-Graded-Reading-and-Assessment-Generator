@@ -17,8 +17,8 @@ hide_streamlit_style = """
     <style>
     :root {
       --hsk-sidebar-width: 21rem;
-      --hsk-sidebar-handle-w: 28px;
-      --hsk-sidebar-handle-h: 88px;
+      --hsk-sidebar-handle-w: 32px;
+      --hsk-sidebar-handle-h: 112px;
     }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -26,7 +26,7 @@ hide_streamlit_style = """
     .block-container {padding-top: 0.55rem; padding-bottom: 1.3rem;}
     h1 {margin-top: 0 !important; margin-bottom: 0.05rem !important; font-size: 2.2rem !important;}
     h2, h3 {margin-top: 0.1rem !important; margin-bottom: 0.2rem !important;}
-    div[data-testid="stHeadingWithActionElements"] h3 {font-size: 1.6rem !important;}
+    div[data-testid="stHeadingWithActionElements"] h3 {font-size: 1.42rem !important;}
     [data-testid="stMarkdownContainer"] p {margin-bottom: 0.45rem;}
     [data-testid="stMetricLabel"] {font-size: 0.92rem !important;}
     [data-testid="stMetricValue"] {font-size: 2.2rem !important;}
@@ -55,10 +55,22 @@ hide_streamlit_style = """
     section[data-testid="stSidebar"] > div:first-child {
       width: var(--hsk-sidebar-width) !important;
     }
+    section[data-testid="stSidebar"][data-collapsed="true"] {
+      min-width: 0 !important;
+      max-width: 0 !important;
+      width: 0 !important;
+      flex: 0 0 0 !important;
+    }
+    section[data-testid="stSidebar"][data-collapsed="true"] > div:first-child {
+      width: 0 !important;
+      min-width: 0 !important;
+      margin-left: calc(-1 * var(--hsk-sidebar-width)) !important;
+      overflow: visible !important;
+    }
     section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
       position: fixed !important;
       top: 50vh !important;
-      left: calc(var(--hsk-sidebar-width) - (var(--hsk-sidebar-handle-w) / 2)) !important;
+      left: calc(var(--hsk-sidebar-width) - (var(--hsk-sidebar-handle-w) * 0.35)) !important;
       right: auto !important;
       transform: translateY(-50%) !important;
       z-index: 100001 !important;
@@ -87,6 +99,10 @@ hide_streamlit_style = """
       padding: 0 !important;
       opacity: 1 !important;
       visibility: visible !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSidebarResizeHandle"] {
+      opacity: 0 !important;
+      pointer-events: none !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg {
       transform: rotate(90deg);
