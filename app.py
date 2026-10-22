@@ -391,6 +391,32 @@ def _split_generated_body_and_review(text: str) -> tuple[str, str]:
     return body, review
 
 
+def _count_target_word_occurrences(
+    body_text: str, target_word_list: list, syllable_words
+) -> dict:
+    """统计每个目标词在正文中出现的次数（用于「语境重现率」）。
+
+    计数基于 :func:`_max_match_tokenize` 的词边界，而不是简单的字符串包含：
+    这样 ``天`` 不会被 ``天气`` 里的 ``天`` 误计，``工作`` 在 ``工作着`` 中也
+    能正确计为 1 次。复用现有最大匹配切分，无需引入 jieba 等第三方分词库。
+
+    Args:
+        body_text: 仅正文（已剔除「核心词回顾」）
+        target_word_list: 目标词列表
+        syllable_words: 大纲词集合，供最大匹配使用
+
+    Returns:
+        dict: 目标词 -> 出现次数
+    """
+    counts = {w: 0 for w in target_word_list if w}
+    if not counts:
+        return counts
+    for tok, _hit in _max_match_tokenize(body_text, syllable_words):
+        if tok in counts:
+            counts[tok] += 1
+    return counts
+
+
 def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
     """对生成的分级阅读文章做全流程合规度分析。
 
@@ -565,6 +591,20 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
     target_total = max(len(target_words), 1)
     all_targets_hit = len(target_words) > 0 and target_hit_count == len(target_words)
 
+    # 4) 语境重现率 = 目标词在正文中的总出现次数 / 目标词个数（平均复现次数）
+    target_word_list = [tw["word"] for tw in target_words if tw["word"]]
+    occ_map = _count_target_word_occurrences(
+        body_text, target_word_list, syllable_words
+    )
+    for tw in target_words:
+        tw["occurrences"] = occ_map.get(tw["word"], 0)
+    total_target_occurrences = sum(tw["occurrences"] for tw in target_words)
+    target_recurrence_rate = (
+        round(total_target_occurrences / len(target_word_list), 2)
+        if target_word_list
+        else 0.0
+    )
+
     out_of_syllabus_words = sorted(
         oos_seen.values(), key=lambda x: (-x["count"], x["word"])
     )
@@ -582,6 +622,8 @@ def analyze_reading_compliance(text: str, locked_words_df, vocab_df):
         "syllabus_hit_count": syllabus_hit_count,
         "syllabus_coverage_pct": round(coverage, 2),
         "out_of_syllabus_words": out_of_syllabus_words,
+        "target_occurrences_total": total_target_occurrences,
+        "target_recurrence_rate": target_recurrence_rate,
         "highlighted_html": highlighted_html,
         "body_text": body_text,
         "review_text": review_text,
@@ -658,6 +700,29 @@ def render_compliance_report(analysis: dict):
         st.caption("说明：总字数仅统计正文；覆盖率参考 Laufer (1989) 95% 阈值。")
         st.markdown("---")
 
+        # —— 语境重现率：目标词在正文中的平均出现次数 ——
+        rate = analysis.get("target_recurrence_rate", 0.0)
+        occ_total = analysis.get("target_occurrences_total", 0)
+        if rate >= 3:
+            rate_hint, rate_color = "复现充分", "normal"
+        elif rate >= 2:
+            rate_hint, rate_color = "复现尚可", "normal"
+        elif rate > 0:
+            rate_hint, rate_color = "复现偏低", "inverse"
+        else:
+            rate_hint, rate_color = "无复现", "inverse"
+        st.metric(
+            "语境重现率（目标词平均出现次数）",
+            f"{rate:.1f} 次/词",
+            delta=rate_hint,
+            delta_color=rate_color,
+        )
+        st.caption(
+            f"计算方式：目标词在正文中共出现 **{occ_total}** 次 ÷ "
+            f"**{analysis.get('target_total', 0)}** 个目标词 = "
+            f"**{rate:.1f}** 次/词（「核心词回顾」不计入）。"
+        )
+
         # —— 详细内容按标签页切分，减少纵向堆叠 ——
         tab_hl, tab_oos, tab_target = st.tabs(
             ["📖 正文高亮", "⚠️ 超纲词列表", "🎯 核心词融入"]
@@ -686,25 +751,28 @@ def render_compliance_report(analysis: dict):
                             st.write(w["definition"])
                         st.caption(f"出现次数：{w['count']}")
 
-        # 标签页 3：核心词融入逐项检查
+        # 标签页 3：核心词融入逐项检查（含复现次数）
         with tab_target:
             if not analysis["target_words"]:
                 st.info("当前锁定词汇为空，跳过核心词融入率展示。")
             else:
+                st.caption("「复现次数」= 该目标词在正文中出现的次数（按词边界计数）")
                 for tw in analysis["target_words"]:
                     with st.container(border=True):
-                        c1, c2, c3, c4 = st.columns([1.3, 1.0, 1.8, 3.4])
+                        c1, c2, c3, c4, c5 = st.columns([1.2, 1.1, 0.9, 1.6, 3.0])
                         with c1:
                             st.markdown(f"**{tw['word']}**")
                         with c2:
                             status = "✅ 命中" if tw["hit"] else "❌ 未命中"
                             st.caption(status)
                         with c3:
+                            st.caption(f"{tw.get('occurrences', 0)} 次")
+                        with c4:
                             meta = " · ".join(
                                 [x for x in (tw["pinyin"], tw["pos"]) if x]
                             )
                             st.caption(meta or "—")
-                        with c4:
+                        with c5:
                             st.caption(tw["definition"] or "—")
 
         # 学术注释
@@ -713,6 +781,9 @@ def render_compliance_report(analysis: dict):
             "📚 学术说明：\n"
             "• 「总字数」仅统计汉字（不含标点、空格、数字），与 HSK 阅读长度测量标准一致。\n"
             "• 「大纲词汇覆盖率」参考 Laufer (1989) 的 95% 阈值：≥95% 时学习者可在不查词典的情况下流畅理解语篇。\n"
+            "• 「语境重现率」为描述性统计量，反映目标词在语篇中的复现密度；"
+            "基于词汇复现（recycling）原则，核心目标词在语篇中多次复现更有利于词汇巩固，"
+            "建议每个目标词至少自然复现 2–3 次。\n"
             "• 疑似超纲词仅为提示，教师可根据学情决定是否替换为更常见的 4 级内同义词，或作为拓展性词汇处理。"
         )
 
@@ -754,6 +825,12 @@ def build_lesson_plan_markdown(
             f"- **核心词融入**：{analysis['target_hit_count']}/{analysis['target_total']}"
             f"（{analysis['target_integration_pct']}%）"
         )
+        if "target_recurrence_rate" in analysis:
+            lines.append(
+                f"- **语境重现率**：{analysis['target_recurrence_rate']:.1f} 次/词"
+                f"（目标词共出现 {analysis.get('target_occurrences_total', 0)} 次"
+                f" ÷ {analysis['target_total']} 个目标词）"
+            )
     lines.append("---")
     lines.append("")
 
