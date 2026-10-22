@@ -44,11 +44,13 @@ hide_streamlit_style = """
     /* —— 侧边栏收起/展开控件：改成竖向把手抽屉，固定在侧边中部 —— */
     section[data-testid="stSidebar"] {
       overflow: visible !important;
+      position: relative !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
-      position: fixed !important;
-      top: 50vh !important;
-      left: calc(21rem - 14px) !important;
+      position: absolute !important;
+      top: 50% !important;
+      right: -14px !important;
+      left: auto !important;
       transform: translateY(-50%) !important;
       z-index: 100001 !important;
       width: 28px !important;
@@ -56,6 +58,8 @@ hide_streamlit_style = """
       display: flex !important;
       align-items: center !important;
       justify-content: center !important;
+      opacity: 1 !important;
+      visibility: visible !important;
       background: transparent !important;
       border: none !important;
       box-shadow: none !important;
@@ -70,11 +74,14 @@ hide_streamlit_style = """
       border: 1px solid #e5e7eb !important;
       box-shadow: 0 4px 14px rgba(0,0,0,0.14) !important;
       padding: 0 !important;
+      opacity: 1 !important;
+      visibility: visible !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg {
       transform: rotate(90deg);
     }
-    [data-testid="stSidebarCollapsedControl"] {
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"] {
       position: fixed !important;
       left: 0 !important;
       top: 50vh !important;
@@ -91,7 +98,8 @@ hide_streamlit_style = """
       padding: 0 !important;
       pointer-events: none !important;
     }
-    [data-testid="stSidebarCollapsedControl"] button {
+    [data-testid="stSidebarCollapsedControl"] button,
+    [data-testid="collapsedControl"] button {
       pointer-events: auto !important;
       width: 28px !important;
       min-width: 28px !important;
@@ -102,7 +110,8 @@ hide_streamlit_style = """
       box-shadow: 0 4px 14px rgba(0,0,0,0.14) !important;
       padding: 0 !important;
     }
-    [data-testid="stSidebarCollapsedControl"] svg {
+    [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="collapsedControl"] svg {
       transform: rotate(90deg);
     }
     /* —— 右下角悬浮快捷工具栏（Floating Action Bar）—— */
