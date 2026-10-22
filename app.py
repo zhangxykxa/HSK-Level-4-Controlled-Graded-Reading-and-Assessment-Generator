@@ -26,7 +26,7 @@ hide_streamlit_style = """
     .block-container {padding-top: 0.55rem; padding-bottom: 1.3rem;}
     h1 {margin-top: 0 !important; margin-bottom: 0.05rem !important; font-size: 2.2rem !important;}
     h2, h3 {margin-top: 0.1rem !important; margin-bottom: 0.2rem !important;}
-    div[data-testid="stHeadingWithActionElements"] h3 {font-size: 1.28rem !important;}
+    div[data-testid="stHeadingWithActionElements"] h3 {font-size: 1.72rem !important;}
     [data-testid="stMarkdownContainer"] p {margin-bottom: 0.45rem;}
     [data-testid="stMetricLabel"] {font-size: 0.92rem !important;}
     [data-testid="stMetricValue"] {font-size: 2.2rem !important;}
@@ -54,7 +54,18 @@ hide_streamlit_style = """
     }
     section[data-testid="stSidebar"] > div:first-child {
       width: var(--hsk-sidebar-width) !important;
-      padding-top: 0.25rem !important;
+      padding-top: 0.06rem !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+      padding-top: 0 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSidebarContent"] > div:first-child {
+      padding-top: 0 !important;
+      margin-top: 0 !important;
+    }
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+      margin-top: 0 !important;
     }
     section[data-testid="stSidebar"][data-collapsed="true"] {
       min-width: 0 !important;
