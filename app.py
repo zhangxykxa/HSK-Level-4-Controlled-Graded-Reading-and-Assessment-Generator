@@ -26,37 +26,84 @@ hide_streamlit_style = """
     [data-testid="stMetricLabel"] {font-size: 0.92rem !important;}
     [data-testid="stMetricValue"] {font-size: 2.2rem !important;}
     [data-testid="stMetricDelta"] {font-size: 0.95rem !important;}
-    /* —— 侧边栏收起/展开控件：固定在侧边中部，避免滚动后跑到顶部 —— */
+    /* —— 压平 Streamlit 自带 header，避免收起侧边栏后在标题上方留一整条白边 —— */
+    header[data-testid="stHeader"] {
+      height: 0 !important;
+      min-height: 0 !important;
+      background: transparent !important;
+      border: none !important;
+    }
+    header[data-testid="stHeader"] > div {
+      height: 0 !important;
+      min-height: 0 !important;
+      padding: 0 !important;
+    }
+    [data-testid="stDecoration"] {
+      display: none !important;
+    }
+    /* —— 侧边栏收起/展开控件：改成竖向把手抽屉，固定在侧边中部 —— */
+    section[data-testid="stSidebar"] {
+      overflow: visible !important;
+    }
     section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
-      position: sticky !important;
-      top: 50vh !important;
-      left: 100%;
-      transform: translate(55%, -50%);
-      z-index: 100001 !important;
-      background: rgba(255,255,255,0.96) !important;
-      border: 1px solid #e5e7eb !important;
-      border-radius: 999px !important;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important;
-    }
-    section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button {
-      border-radius: 999px !important;
-    }
-    [data-testid="stSidebarCollapsedControl"] {
       position: fixed !important;
-      left: 10px !important;
       top: 50vh !important;
+      left: calc(21rem - 14px) !important;
       transform: translateY(-50%) !important;
       z-index: 100001 !important;
+      width: 28px !important;
+      height: 88px !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
       background: transparent !important;
       border: none !important;
       box-shadow: none !important;
       padding: 0 !important;
     }
-    [data-testid="stSidebarCollapsedControl"] button {
-      background: rgba(255,255,255,0.96) !important;
+    section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button {
+      width: 28px !important;
+      min-width: 28px !important;
+      height: 88px !important;
+      border-radius: 0 999px 999px 0 !important;
+      background: rgba(255,255,255,0.97) !important;
       border: 1px solid #e5e7eb !important;
-      border-radius: 999px !important;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.14) !important;
+      padding: 0 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg {
+      transform: rotate(90deg);
+    }
+    [data-testid="stSidebarCollapsedControl"] {
+      position: fixed !important;
+      left: 0 !important;
+      top: 50vh !important;
+      transform: translateY(-50%) !important;
+      z-index: 100001 !important;
+      width: 28px !important;
+      height: 88px !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background: transparent !important;
+      border: none !important;
+      box-shadow: none !important;
+      padding: 0 !important;
+      pointer-events: none !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] button {
+      pointer-events: auto !important;
+      width: 28px !important;
+      min-width: 28px !important;
+      height: 88px !important;
+      background: rgba(255,255,255,0.97) !important;
+      border: 1px solid #e5e7eb !important;
+      border-radius: 0 999px 999px 0 !important;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.14) !important;
+      padding: 0 !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] svg {
+      transform: rotate(90deg);
     }
     /* —— 右下角悬浮快捷工具栏（Floating Action Bar）—— */
     .hsk-fab {
