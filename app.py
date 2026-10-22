@@ -15,6 +15,11 @@ st.set_page_config(page_title="HSK 4 Graded Material Generator", layout="wide")
 # 注意：不隐藏 header 和 stStatusWidget，否则 Streamlit Cloud 会导致页面白屏/无法交互
 hide_streamlit_style = """
     <style>
+    :root {
+      --hsk-sidebar-width: 21rem;
+      --hsk-sidebar-handle-w: 28px;
+      --hsk-sidebar-handle-h: 88px;
+    }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .viewerBadge_container__17vsn {display: none !important;}
@@ -44,17 +49,21 @@ hide_streamlit_style = """
     /* —— 侧边栏收起/展开控件：改成竖向把手抽屉，固定在侧边中部 —— */
     section[data-testid="stSidebar"] {
       overflow: visible !important;
-      position: relative !important;
+      min-width: var(--hsk-sidebar-width) !important;
+      max-width: var(--hsk-sidebar-width) !important;
+    }
+    section[data-testid="stSidebar"] > div:first-child {
+      width: var(--hsk-sidebar-width) !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
-      position: absolute !important;
-      top: 50% !important;
-      right: -14px !important;
-      left: auto !important;
+      position: fixed !important;
+      top: 50vh !important;
+      left: calc(var(--hsk-sidebar-width) - (var(--hsk-sidebar-handle-w) / 2)) !important;
+      right: auto !important;
       transform: translateY(-50%) !important;
       z-index: 100001 !important;
-      width: 28px !important;
-      height: 88px !important;
+      width: var(--hsk-sidebar-handle-w) !important;
+      height: var(--hsk-sidebar-handle-h) !important;
       display: flex !important;
       align-items: center !important;
       justify-content: center !important;
@@ -64,11 +73,13 @@ hide_streamlit_style = """
       border: none !important;
       box-shadow: none !important;
       padding: 0 !important;
+      pointer-events: none !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button {
-      width: 28px !important;
-      min-width: 28px !important;
-      height: 88px !important;
+      pointer-events: auto !important;
+      width: var(--hsk-sidebar-handle-w) !important;
+      min-width: var(--hsk-sidebar-handle-w) !important;
+      height: var(--hsk-sidebar-handle-h) !important;
       border-radius: 0 999px 999px 0 !important;
       background: rgba(255,255,255,0.97) !important;
       border: 1px solid #e5e7eb !important;
@@ -87,8 +98,8 @@ hide_streamlit_style = """
       top: 50vh !important;
       transform: translateY(-50%) !important;
       z-index: 100001 !important;
-      width: 28px !important;
-      height: 88px !important;
+      width: var(--hsk-sidebar-handle-w) !important;
+      height: var(--hsk-sidebar-handle-h) !important;
       display: flex !important;
       align-items: center !important;
       justify-content: center !important;
@@ -101,17 +112,34 @@ hide_streamlit_style = """
     [data-testid="stSidebarCollapsedControl"] button,
     [data-testid="collapsedControl"] button {
       pointer-events: auto !important;
-      width: 28px !important;
-      min-width: 28px !important;
-      height: 88px !important;
+      width: var(--hsk-sidebar-handle-w) !important;
+      min-width: var(--hsk-sidebar-handle-w) !important;
+      height: var(--hsk-sidebar-handle-h) !important;
       background: rgba(255,255,255,0.97) !important;
       border: 1px solid #e5e7eb !important;
       border-radius: 0 999px 999px 0 !important;
       box-shadow: 0 4px 14px rgba(0,0,0,0.14) !important;
       padding: 0 !important;
     }
+    /* 某些版本的展开按钮挂在 header 里，而不是 collapsedControl；一并改造成侧边把手 */
+    header[data-testid="stHeader"] button {
+      position: fixed !important;
+      left: 0 !important;
+      top: 50vh !important;
+      transform: translateY(-50%) !important;
+      z-index: 100001 !important;
+      width: var(--hsk-sidebar-handle-w) !important;
+      min-width: var(--hsk-sidebar-handle-w) !important;
+      height: var(--hsk-sidebar-handle-h) !important;
+      border-radius: 0 999px 999px 0 !important;
+      background: rgba(255,255,255,0.97) !important;
+      border: 1px solid #e5e7eb !important;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.14) !important;
+      padding: 0 !important;
+    }
     [data-testid="stSidebarCollapsedControl"] svg,
-    [data-testid="collapsedControl"] svg {
+    [data-testid="collapsedControl"] svg,
+    header[data-testid="stHeader"] button svg {
       transform: rotate(90deg);
     }
     /* —— 右下角悬浮快捷工具栏（Floating Action Bar）—— */
