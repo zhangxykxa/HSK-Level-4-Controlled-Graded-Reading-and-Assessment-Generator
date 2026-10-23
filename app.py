@@ -66,9 +66,23 @@ hide_streamlit_style = """
       padding-top: 0 !important;
       margin-top: 0 !important;
     }
+    /* 侧边栏顶部还有 header + user content 两层容器在贡献留白，一起压掉 */
+    section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
+      padding: 0 !important;
+      margin: 0 !important;
+      min-height: 0 !important;
+      height: 0 !important;
+      overflow: visible !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+      padding-top: 0 !important;
+      margin-top: -0.6rem !important;
+    }
     section[data-testid="stSidebar"] h2,
-    section[data-testid="stSidebar"] h3 {
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] [data-testid="stHeadingWithActionElements"] {
       margin-top: 0 !important;
+      padding-top: 0 !important;
     }
     section[data-testid="stSidebar"][data-collapsed="true"] {
       min-width: 0 !important;
@@ -152,8 +166,23 @@ hide_streamlit_style = """
       box-shadow: 0 4px 14px rgba(0,0,0,0.14) !important;
       padding: 0 !important;
     }
-    /* 某些版本的展开按钮挂在 header 里，而不是 collapsedControl；一并改造成侧边把手 */
-    header[data-testid="stHeader"] button {
+    /* —— 平台开发控件：Deploy 按钮 / ⋮ 主菜单，直接隐藏 ——
+       否则它们会被下面的「header 按钮改把手」规则一起搬到中部，
+       导致鼠标在把手上/下方点到 Streamlit 的分享、页面设置弹窗。 */
+    [data-testid="stAppDeployButton"],
+    [data-testid="stMainMenu"],
+    #MainMenu {
+      display: none !important;
+    }
+    /* 指向源码仓库的 GitHub 入口（工具栏与侧边栏两处）一并隐藏 */
+    header[data-testid="stHeader"] a[href*="github.com"],
+    section[data-testid="stSidebar"] a[href*="github.com"],
+    [data-testid="stAppGitHubLink"] {
+      display: none !important;
+    }
+    /* 某些版本的展开按钮挂在 header 里，而不是 collapsedControl；
+       用 :not() 排除平台按钮，只把「侧边栏开关」改造成侧边把手。 */
+    header[data-testid="stHeader"] button:not([data-testid="stAppDeployButton"]):not([data-testid="stMainMenu"]) {
       position: fixed !important;
       left: 0 !important;
       top: 50vh !important;
