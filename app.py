@@ -18,7 +18,13 @@ st.set_page_config(page_title="HSK 4 Graded Material Generator", layout="wide")
 #     负责压平 header、隐藏平台工具栏、把侧边栏开关改造成侧边把手。
 # 原页面不加嵌入样式，避免 0 高度 header 造出「看不见但能点到」的控件。
 # 注意：不隐藏 stStatusWidget，否则 Streamlit Cloud 可能白屏 / 无法交互。
-_embed_mode = str(st.query_params.get("embed", "")).lower() in ("true", "1", "yes")
+# 说明：Streamlit 会把 ?embed=true 这个参数内部消费掉，st.query_params 读不到它，
+# 所以壳页 iframe 额外带一个自有参数 hsk_shell=1 作为判定依据（两者任一命中即视为壳页）。
+_query_params = st.query_params
+_embed_mode = (
+    str(_query_params.get("hsk_shell", "")).lower() in ("1", "true", "yes")
+    or str(_query_params.get("embed", "")).lower() in ("true", "1", "yes")
+)
 
 _common_css = """
     <style>
@@ -68,6 +74,20 @@ _common_css = """
       color: #ffffff !important;
       border-color: #FF4B4B;
     }
+    /* —— 侧边栏问卷入口：与壳页顶栏 CTA 用同一个红（#b91c1c）—— */
+    .hsk-survey-btn {
+      display: block;
+      text-align: center;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #b91c1c;
+      color: #ffffff !important;
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none !important;
+      box-shadow: 0 2px 8px rgba(185, 28, 28, 0.25);
+    }
+    .hsk-survey-btn:hover { background: #a01818; }
     </style>
 """
 
@@ -236,9 +256,16 @@ _embed_css = """
     </style>
 """
 
+_raw_css = """
+    <style>
+    /* 原（非嵌入）页面右下角有 Streamlit 原生按钮（Manage app 等），
+       把右下角悬浮工具栏整体抬高，避免互相压住。 */
+    .hsk-fab { bottom: 84px !important; }
+    </style>
+"""
+
 st.markdown(_common_css, unsafe_allow_html=True)
-if _embed_mode:
-    st.markdown(_embed_css, unsafe_allow_html=True)
+st.markdown(_embed_css if _embed_mode else _raw_css, unsafe_allow_html=True)
 
 st.title("📚 HSK 4 级受控分级阅读与测评生成器")
 st.subheader("Curriculum-Adaptive Reading & Exercise Generator (HSK 2.0 vs 3.0)")
@@ -1996,13 +2023,12 @@ st.sidebar.info(
     icon="ℹ️",
 )
 # 问卷星 · 专家评估量表（点击后在新标签页打开）
+# 用自定义样式锚点，而不是 st.link_button，这样能与壳页顶栏 CTA 用同一个红（#b91c1c）
 SURVEY_URL = "https://v.wjx.cn/vm/w2FDyLB.aspx#"
-st.sidebar.link_button(
-    "👉 点击填写 5 分制专家评估量表",
-    SURVEY_URL,
-    use_container_width=True,
-    type="primary",
-    help="点击后将在新标签页打开问卷星 · 5 分制专家评估量表。",
+st.sidebar.markdown(
+    f'<a class="hsk-survey-btn" href="{SURVEY_URL}" target="_blank" '
+    'rel="noopener noreferrer">👉 点击填写 5 分制专家评估量表</a>',
+    unsafe_allow_html=True,
 )
 st.sidebar.caption(
     "研究伦理说明：所有问卷数据仅作聚合统计与学位论文撰写，不收集任何可识别个人信息。"
