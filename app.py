@@ -12,17 +12,22 @@ import openai
 st.set_page_config(page_title="HSK 4 Graded Material Generator", layout="wide")
 
 # 隐藏 Streamlit 开发痕迹（CSS 注入）
-# 注意：不隐藏 header 和 stStatusWidget，否则 Streamlit Cloud 会导致页面白屏/无法交互
-hide_streamlit_style = """
+# 样式拆成两套，避免「为了让壳页好看」而破坏原页面的可用性：
+#   - 公共样式（_common_css）：排版与度量微调，原页面 / 壳页都生效；
+#   - 嵌入样式（_embed_css）：仅在壳页 iframe 使用的 ?embed=true 下生效，
+#     负责压平 header、隐藏平台工具栏、把侧边栏开关改造成侧边把手。
+# 原页面不加嵌入样式，避免 0 高度 header 造出「看不见但能点到」的控件。
+# 注意：不隐藏 stStatusWidget，否则 Streamlit Cloud 可能白屏 / 无法交互。
+_embed_mode = str(st.query_params.get("embed", "")).lower() in ("true", "1", "yes")
+
+_common_css = """
     <style>
-    :root {
-      --hsk-sidebar-width: 21rem;
-      --hsk-sidebar-handle-w: 28px;
-      --hsk-sidebar-handle-h: 240px;
-    }
-    #MainMenu {visibility: hidden;}
+    #MainMenu {display: none !important;}
     footer {visibility: hidden;}
     .viewerBadge_container__17vsn {display: none !important;}
+    [data-testid="stDecoration"] {display: none !important;}
+    /* 指向源码仓库的 GitHub 入口不对外展示 */
+    a[href*="github.com"] {display: none !important;}
     .block-container {padding-top: 0.55rem; padding-bottom: 1.3rem;}
     h1 {margin-top: 0 !important; margin-bottom: 0.05rem !important; font-size: 2.2rem !important;}
     h2, h3 {margin-top: 0.1rem !important; margin-bottom: 0.2rem !important;}
@@ -32,6 +37,47 @@ hide_streamlit_style = """
     [data-testid="stMetricLabel"] {font-size: 0.92rem !important;}
     [data-testid="stMetricValue"] {font-size: 2.2rem !important;}
     [data-testid="stMetricDelta"] {font-size: 0.95rem !important;}
+    /* —— 右下角悬浮快捷工具栏（Floating Action Bar）—— */
+    .hsk-fab {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 99999;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    .hsk-fab a {
+      display: inline-block;
+      padding: 9px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.2;
+      text-decoration: none !important;
+      background: rgba(255, 255, 255, 0.97);
+      color: #1f2937 !important;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+      white-space: nowrap;
+    }
+    .hsk-fab a:hover { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2); }
+    .hsk-fab a.primary {
+      background: #FF4B4B;
+      color: #ffffff !important;
+      border-color: #FF4B4B;
+    }
+    </style>
+"""
+
+_embed_css = """
+    <style>
+    :root {
+      --hsk-sidebar-width: 21rem;
+      --hsk-sidebar-handle-w: 28px;
+      --hsk-sidebar-handle-h: 240px;
+    }
     /* —— 压平 Streamlit 自带 header，避免收起侧边栏后在标题上方留一整条白边 —— */
     header[data-testid="stHeader"] {
       height: 0 !important;
@@ -44,9 +90,6 @@ hide_streamlit_style = """
       min-height: 0 !important;
       padding: 0 !important;
     }
-    [data-testid="stDecoration"] {
-      display: none !important;
-    }
     /* —— 侧边栏收起/展开控件：改成竖向把手抽屉，固定在侧边中部 —— */
     section[data-testid="stSidebar"] {
       overflow: visible !important;
@@ -56,17 +99,18 @@ hide_streamlit_style = """
     section[data-testid="stSidebar"] > div:first-child {
       width: var(--hsk-sidebar-width) !important;
       padding-top: 0 !important;
-      margin-top: -0.32rem !important;
+      margin-top: 0 !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
       padding-top: 0 !important;
-      margin-top: -0.22rem !important;
+      margin-top: 0 !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarContent"] > div:first-child {
       padding-top: 0 !important;
       margin-top: 0 !important;
     }
-    /* 侧边栏顶部还有 header + user content 两层容器在贡献留白，一起压掉 */
+    /* 压掉侧边栏顶部两层容器的留白；但保留一点点上边距，
+       避免首个控件贴到壳页顶栏下沿、被滚动容器裁掉字。 */
     section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
       padding: 0 !important;
       margin: 0 !important;
@@ -75,8 +119,8 @@ hide_streamlit_style = """
       overflow: visible !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
-      padding-top: 0 !important;
-      margin-top: -0.6rem !important;
+      padding-top: 0.55rem !important;
+      margin-top: 0 !important;
     }
     section[data-testid="stSidebar"] h2,
     section[data-testid="stSidebar"] h3,
@@ -166,23 +210,10 @@ hide_streamlit_style = """
       box-shadow: 0 4px 14px rgba(0,0,0,0.14) !important;
       padding: 0 !important;
     }
-    /* —— 平台开发控件：Deploy 按钮 / ⋮ 主菜单，直接隐藏 ——
-       否则它们会被下面的「header 按钮改把手」规则一起搬到中部，
-       导致鼠标在把手上/下方点到 Streamlit 的分享、页面设置弹窗。 */
-    [data-testid="stAppDeployButton"],
-    [data-testid="stMainMenu"],
-    #MainMenu {
-      display: none !important;
-    }
-    /* 指向源码仓库的 GitHub 入口（工具栏与侧边栏两处）一并隐藏 */
-    header[data-testid="stHeader"] a[href*="github.com"],
-    section[data-testid="stSidebar"] a[href*="github.com"],
-    [data-testid="stAppGitHubLink"] {
-      display: none !important;
-    }
-    /* 某些版本的展开按钮挂在 header 里，而不是 collapsedControl；
-       用 :not() 排除平台按钮，只把「侧边栏开关」改造成侧边把手。 */
-    header[data-testid="stHeader"] button:not([data-testid="stAppDeployButton"]):not([data-testid="stMainMenu"]) {
+    /* 某些版本的展开按钮挂在 header 里，而不是 collapsedControl，
+       这里一并改造成侧边把手（?embed=true 下平台工具栏本就不渲染，
+       因此不会误伤 Deploy / ⋮ 这类控件）。 */
+    header[data-testid="stHeader"] button {
       position: fixed !important;
       left: 0 !important;
       top: 50vh !important;
@@ -202,40 +233,12 @@ hide_streamlit_style = """
     header[data-testid="stHeader"] button svg {
       transform: rotate(90deg);
     }
-    /* —— 右下角悬浮快捷工具栏（Floating Action Bar）—— */
-    .hsk-fab {
-      position: fixed;
-      right: 18px;
-      bottom: 18px;
-      z-index: 99999;
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 8px;
-    }
-    .hsk-fab a {
-      display: inline-block;
-      padding: 9px 14px;
-      border-radius: 999px;
-      font-size: 13px;
-      font-weight: 600;
-      line-height: 1.2;
-      text-decoration: none !important;
-      background: rgba(255, 255, 255, 0.97);
-      color: #1f2937 !important;
-      border: 1px solid #e5e7eb;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
-      white-space: nowrap;
-    }
-    .hsk-fab a:hover { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2); }
-    .hsk-fab a.primary {
-      background: #FF4B4B;
-      color: #ffffff !important;
-      border-color: #FF4B4B;
-    }
     </style>
 """
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+st.markdown(_common_css, unsafe_allow_html=True)
+if _embed_mode:
+    st.markdown(_embed_css, unsafe_allow_html=True)
 
 st.title("📚 HSK 4 级受控分级阅读与测评生成器")
 st.subheader("Curriculum-Adaptive Reading & Exercise Generator (HSK 2.0 vs 3.0)")
