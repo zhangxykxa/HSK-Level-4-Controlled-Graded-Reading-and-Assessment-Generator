@@ -6,29 +6,50 @@
 
 ## 在线入口
 
-- 成品展示页：`https://zhangxykxa.github.io/HSK-Level-4-Controlled-Graded-Reading-and-Assessment-Generator/`
-- Streamlit 应用：`https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app/`
+| 入口 | 地址 | 用途 |
+| --- | --- | --- |
+| 成品展示页（壳页） | `https://zhangxykxa.github.io/HSK-Level-4-Controlled-Graded-Reading-and-Assessment-Generator/` | 面向评审/被试的正式入口。自建页头 + iframe 内嵌 Streamlit，隐藏一切平台痕迹 |
+| Streamlit 应用（原页面） | `https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app/` | 保留全部原生功能的源站，便于排查问题 |
+
+两个入口跑的是同一份 `app.py`。壳页通过 `?embed=true&hsk_shell=1` 进入「嵌入模式」，注入一套专用的紧凑样式；原页面不携带该参数，走原生样式。
 
 ## 主要功能
 
 - **双轨大纲切换**：支持 HSK 2.0（1,200 词）与 HSK 3.0（2,000 词）两套 Level 4 词表。
 - **目标词锁定**：按教学主题随机抽取 HSK 4 级目标词，支持 `Reshuffle` 重锁。
 - **CTG 受控阅读生成**：按主题、字数与目标词白名单生成 HSK 4 级分级阅读。
-- **AQG 自动命题**：为生成文章产出 1–2 道四选一阅读理解题，并要求干扰项对齐。
+- **AQG 自动命题**：为生成文章产出 1–2 道四选一阅读理解题，要求干扰项对齐，并在解析中标注干扰项类型（词性干扰 / 语意合理干扰 / 原词干扰 / 形近干扰）。
+- **选项与答案随机化**：解析后对 A/B/C/D 做确定性洗牌，并把答案键均匀分散，避免正确答案长期固定在 A。
 - **合规度检测报告**：统计总字数、大纲覆盖率、核心词融入率、语境重现率与疑似超纲词。
-- **超纲词高亮与补全**：对疑似超纲词做正文高亮，并尝试补全拼音、词性和英文释义。
-- **教案导出**：一键导出 Markdown 教案，包含生成时间、生成引擎、阅读文本、核心词、MCQ 与答案解析。
-- **专家评估闭环**：侧边栏与壳页面均提供专家评估问卷入口。
+- **超纲词高亮与补全**：对疑似超纲词做正文高亮，并调用模型补全拼音、词性和英文释义。
+- **教案导出**：一键导出 Markdown 教案，含生成时间（分钟级）、生成引擎、阅读文本、核心词、MCQ 与答案解析。
+- **悬浮快捷工具栏**：右下角常驻「回到顶部」+「一键导出教案」。
+- **专家评估闭环**：侧边栏与壳页顶栏均提供专家评估问卷入口。
+- **去平台化外壳**：GitHub Pages 自建页头 + iframe 嵌入，访客看不到 Streamlit 工具栏与 GitHub 外链。
+- **定时保活**：GitHub Actions 每小时唤醒一次云端应用，缓解免费层休眠导致的首次访问白屏。
 
 ## 技术栈
 
 - **前端框架**：Streamlit
-- **语言**：Python 3.9+
+- **语言**：Python 3.9+（开发验证环境为 3.13.2）
 - **数据处理**：pandas
 - **模型调用**：openai Python SDK（兼容 OpenAI-style API）
 - **部署方式**：
   - Streamlit Community Cloud 承载应用
   - GitHub Pages 承载外壳展示页 `docs/index.html`
+  - GitHub Actions 定时保活（`.github/workflows/keepalive.yml`）
+
+## 界面与样式约定
+
+`app.py` 顶部的 CSS 拆成三段，按访问入口分别注入：
+
+| 样式块 | 生效范围 | 内容 |
+| --- | --- | --- |
+| `_common_css` | 两个入口都生效 | 隐藏 `#MainMenu` / `footer` / 装饰条 / GitHub 外链；标题字号层级（主标题 `2.2rem`，二级标题 `1.58rem`）；KPI 字号；悬浮工具栏；侧边栏问卷按钮 |
+| `_embed_css` | 仅壳页（嵌入模式） | 压平 Streamlit header；侧边栏宽度锁定 `21rem`；竖向把手抽屉（`28px × 240px`，固定在视口中线）；侧边栏上下留白 `2rem`；收起态释放主区空间；禁用原生缩放手柄 |
+| `_raw_css` | 仅原页面 | 把悬浮工具栏上抬到 `bottom: 84px`，避开 Streamlit 原生管理按钮 |
+
+嵌入模式判定：壳页 iframe 的 src 带 `hsk_shell=1`。**注意** `?embed=true` 会被 Streamlit 内部消费掉，`st.query_params` 读不到，所以必须用自定义参数。
 
 ## 项目特点
 
@@ -36,6 +57,7 @@
 - 兼容 Windows 常见 CSV 编码，自动尝试 `utf-8-sig / gb18030 / gbk`。
 - MCQ JSON 解析具备 Markdown 围栏清洗与结构校验兜底。
 - 导出教案使用 UTF-8 BOM 编码，便于直接复制进 Word / OneNote / Notion。
+- 选项洗牌使用 `hashlib.md5` 派生种子，rerun 时不会抖动。
 
 ## 目录结构
 
@@ -45,13 +67,17 @@
 ├── docs/
 │   ├── index.html                              # GitHub Pages 外壳页
 │   └── .nojekyll
+├── .github/
+│   └── workflows/
+│       └── keepalive.yml                       # 定时保活工作流
 ├── requirements.txt                            # 依赖清单
+├── diagnose_api_keys.py                        # API Key 诊断脚本
 ├── HSK 2.0 Level 4 vocabulary 1200.csv         # HSK 2.0 词表
 ├── HSK 3.0 Level 4 vocabulary 2000.csv         # HSK 3.0 词表
 ├── .streamlit/
 │   └── config.toml                             # Streamlit 前端配置
 ├── README.md
-└── PROJECT_HANDOVER.md
+└── PROJECT_HANDOVER.md                         # 交接文档（本地维护）
 ```
 
 ## 支持的模型服务商
@@ -119,6 +145,15 @@ SILICONFLOW_API_KEY = "sk-..."
 streamlit run app.py
 ```
 
+> **当前开发机的实际情况**：Python 装在 `C:\Users\ZhangXiao\python-sdk\python3.13.2`，已加入用户 PATH；但 `Scripts` 目录不在 PATH 中，所以 `pip` / `streamlit` 命令直接敲不到，需改用 `python -m pip` / `python -m streamlit`。仅需语法自检时可以跑 `python -m py_compile app.py`，无需安装任何依赖。
+
+## 定时保活
+
+`.github/workflows/keepalive.yml` 每小时（UTC 整点）访问一次应用首页与 `/_stcore/health`，避免 Streamlit Community Cloud 免费层因闲置休眠、访客首次打开白屏。
+
+- 手动验证：仓库 `Actions` → `Streamlit Keep-Alive` → `Run workflow`
+- 注意：GitHub 在仓库连续 60 天无提交后会停用定时工作流，有新 commit 即自动恢复
+
 ## 使用流程
 
 1. 在左侧选择大纲版本、主题、目标字数与目标词数量。
@@ -144,6 +179,9 @@ streamlit run app.py
 | `402 Insufficient Balance` | 对应服务商账户余额不足。 |
 | MCQ JSON 解析失败 | 模型输出了额外文本或代码围栏，系统会先自动清洗；若仍失败，请重试。 |
 | CSV 读取报错 | 项目已内置多编码探测，若仍失败请确认词表文件名与仓库中的默认文件一致。 |
+| 壳页显示为原生样式（工具栏冒出来） | iframe 的 src 丢了 `hsk_shell=1`，检查 `docs/index.html`。 |
+| 首次打开长时间白屏 | Streamlit Cloud 免费层冷启动；保活工作流可缓解，冷启动期间 `Running...` 提示因样式隐藏而不可见。 |
+| 原页面右下角悬浮按钮位置怪 | `_raw_css` 已把 `bottom` 抬到 `84px` 避开原生管理按钮；若 Streamlit 改版可再调。 |
 
 ## License
 
