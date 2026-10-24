@@ -139,7 +139,7 @@ _embed_css = """
       overflow: visible !important;
     }
     section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
-      padding-top: 0.55rem !important;
+      padding-top: 1rem !important;
       margin-top: 0 !important;
     }
     section[data-testid="stSidebar"] h2,

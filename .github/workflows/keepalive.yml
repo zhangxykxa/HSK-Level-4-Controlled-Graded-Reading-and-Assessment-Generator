@@ -1,0 +1,26 @@
+name: Streamlit Keep-Alive
+
+# 定时唤醒 Streamlit Community Cloud 应用，避免免费层因闲置而休眠，
+# 导致访问者首次打开时长时间白屏。
+on:
+  schedule:
+    # 每小时整点执行一次（GitHub Actions 的 cron 使用 UTC 时间）
+    - cron: "0 * * * *"
+  # 支持在 Actions 页面手动触发一次，便于验证
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Ping app and health endpoint
+        run: |
+          BASE="https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app"
+          for URL in "$BASE/" "$BASE/_stcore/health"; do
+            echo "==> GET $URL"
+            curl -sS -L --max-time 90 \
+              -o /dev/null \
+              -w "    HTTP %{http_code} | %{time_total}s\n" \
+              "$URL" || echo "    请求失败（可能正在冷启动，稍后自动重试即可）"
+          done
