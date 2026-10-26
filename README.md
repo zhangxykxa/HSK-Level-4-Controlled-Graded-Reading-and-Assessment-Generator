@@ -26,7 +26,7 @@
 - **悬浮快捷工具栏**：右下角常驻「回到顶部」+「一键导出教案」。
 - **专家评估闭环**：侧边栏与壳页顶栏均提供专家评估问卷入口。
 - **去平台化外壳**：GitHub Pages 自建页头 + iframe 嵌入，访客看不到 Streamlit 工具栏与 GitHub 外链。
-- **定时保活**：GitHub Actions 每小时唤醒一次云端应用，缓解免费层休眠导致的首次访问白屏。
+- **定时保活**：GitHub Actions 每 15 分钟访问一次应用容器（`/~/+/_stcore/health`），缓解免费层休眠导致的首次访问白屏。
 
 ## 技术栈
 
@@ -149,10 +149,21 @@ streamlit run app.py
 
 ## 定时保活
 
-`.github/workflows/keepalive.yml` 每小时（UTC 整点）访问一次应用首页与 `/_stcore/health`，避免 Streamlit Community Cloud 免费层因闲置休眠、访客首次打开白屏。
+`.github/workflows/keepalive.yml` 每 15 分钟（UTC）访问一次应用容器，避免 Streamlit Community Cloud 免费层因闲置休眠、访客首次打开白屏。
+
+探测路径必须带 `/~/+/` 前缀——这是应用容器真正挂载的位置：
+
+| 路径 | 实际归属 | 能否保活 |
+| --- | --- | --- |
+| `/` | 平台 nginx 静态 SPA 外壳（约 9782 字节 HTML） | ❌ 不经过应用容器 |
+| `/_stcore/health` | 同 被 nginx 兜底路由 | ❌ 不经过应用容器 |
+| `/~/+/` | 应用自身的 `index.html` | ✅ |
+| `/~/+/_stcore/health` | 应用运行时返回纯文本 `ok` | ✅（工作流据此判断存活） |
 
 - 手动验证：仓库 `Actions` → `Streamlit Keep-Alive` → `Run workflow`
-- 注意：GitHub 在仓库连续 60 天无提交后会停用定时工作流，有新 commit 即自动恢复
+- 注意 1：GitHub 的 `schedule` 是 best-effort，高峰时段会被排队延迟数小时，故用 15 分钟高频对冲
+- 注意 2：GitHub 在仓库连续 60 天无提交后会停用定时工作流，有新 commit 即自动恢复
+- 注意 3：保活只能「防止休眠」，**不能唤醒已休眠的应用**——真休眠后必须用浏览器打开源站手动唤醒
 
 ## 使用流程
 
@@ -180,7 +191,7 @@ streamlit run app.py
 | MCQ JSON 解析失败 | 模型输出了额外文本或代码围栏，系统会先自动清洗；若仍失败，请重试。 |
 | CSV 读取报错 | 项目已内置多编码探测，若仍失败请确认词表文件名与仓库中的默认文件一致。 |
 | 壳页显示为原生样式（工具栏冒出来） | iframe 的 src 丢了 `hsk_shell=1`，检查 `docs/index.html`。 |
-| 首次打开长时间白屏 | Streamlit Cloud 免费层冷启动；保活工作流可缓解，冷启动期间 `Running...` 提示因样式隐藏而不可见。 |
+| 首次打开长时间白屏 | Streamlit Cloud 免费层冷启动；保活工作流（探测 `/~/+/_stcore/health`）可缓解，冷启动期间 `Running...` 提示因样式隐藏而不可见。 |
 | 原页面右下角悬浮按钮位置怪 | `_raw_css` 已把 `bottom` 抬到 `84px` 避开原生管理按钮；若 Streamlit 改版可再调。 |
 
 ## License

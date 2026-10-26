@@ -1,11 +1,22 @@
 name: Streamlit Keep-Alive
 
-# 定时唤醒 Streamlit Community Cloud 应用，避免免费层因闲置而休眠，
+# 定时访问 Streamlit Community Cloud 应用容器，避免免费层因闲置而休眠，
 # 导致访问者首次打开时长时间白屏。
+#
+# ⚠️ 关键：Streamlit Community Cloud 的 `/` 与 `/_stcore/health` 是由平台
+# nginx 静态托管的「平台 SPA 外壳」（约 9782 字节 HTML，带 GTM / status 页
+# 嵌入），请求根本不会到达应用容器，因此对这两条路径做 curl 起不到任何保活
+# 作用（只会得到一个假 success）。
+#
+# 应用容器实际挂在 `/~/+/` 前缀下：
+#   GET /~/+/                -> 应用自身的 index.html（6467 字节）
+#   GET /~/+/_stcore/health  -> 应用运行时返回纯文本 "ok"；休眠时拿不到
+# 本工作流探测后者，确保每次请求都真正打到应用容器。
 on:
   schedule:
-    # 每小时整点执行一次（GitHub Actions 的 cron 使用 UTC 时间）
-    - cron: "0 * * * *"
+    # 每 15 分钟一次（GitHub Actions 的 cron 使用 UTC 时间）。
+    # 注：schedule 是 best-effort，高峰期会被排队延迟数小时，故用高频对冲。
+    - cron: "*/15 * * * *"
   # 支持在 Actions 页面手动触发一次，便于验证
   workflow_dispatch:
 
@@ -14,13 +25,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Ping app and health endpoint
+      - name: Ping app container
         run: |
           BASE="https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app"
-          for URL in "$BASE/" "$BASE/_stcore/health"; do
-            echo "==> GET $URL"
+          for P in "/~/+/" "/~/+/_stcore/health"; do
+            echo "==> GET $BASE$P"
             curl -sS -L --max-time 90 \
               -o /dev/null \
               -w "    HTTP %{http_code} | %{time_total}s\n" \
-              "$URL" || echo "    请求失败（可能正在冷启动，稍后自动重试即可）"
+              "$BASE$P" || echo "    请求失败（应用可能正在冷启动，稍后自动重试即可）"
           done
+
+          HEALTH="$(curl -sS -L --max-time 90 "$BASE/~/+/_stcore/health" || true)"
+          if [ "$HEALTH" = "ok" ]; then
+            echo "✅ 应用容器存活（/_stcore/health = ok）"
+          else
+            echo "::warning::应用容器未返回 ok（实际返回: '$HEALTH'）—— 可能已休眠，需用浏览器访问唤醒"
+          fi
