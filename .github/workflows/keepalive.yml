@@ -18,6 +18,11 @@ on:
     # 每 2 小时一次（cron 使用 UTC）。休眠阈值是 12 小时，留 6 倍余量以对冲
     # GitHub Actions schedule 的 best-effort 延迟（高峰期可能推迟数小时）。
     - cron: "0 */2 * * *"
+  # 改动了保活逻辑就立刻跑一次验证（仅限这两个文件，普通的业务提交不会触发）
+  push:
+    paths:
+      - ".github/workflows/keepalive.yml"
+      - ".github/scripts/keepalive.py"
   # 支持在 Actions 页面手动触发一次，便于验证
   workflow_dispatch:
 
