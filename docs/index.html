@@ -94,7 +94,7 @@
       position: relative;
       overflow: hidden;
     }
-    .stage iframe {
+    .stage iframe.app-frame {
       position: absolute;
       inset: 0 0 calc(var(--embed-bottom-mask) * -1) 0;
       width: 100%;
@@ -112,6 +112,53 @@
       background: var(--bg);
       pointer-events: none;
     }
+
+    /* ---- 冷启动遮罩 ---- */
+    .wake-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: var(--bg);
+      transition: opacity .4s ease;
+    }
+    .wake-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .wake-overlay .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .wake-overlay .msg {
+      font-size: 14px;
+      color: var(--muted);
+      text-align: center;
+      max-width: 320px;
+      line-height: 1.5;
+    }
+    .wake-overlay .msg strong { color: var(--fg); }
+    .wake-overlay .retry-link {
+      font-size: 13px;
+      color: var(--accent);
+      text-decoration: none;
+      cursor: pointer;
+      padding: 8px 16px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      display: none;
+    }
+    .wake-overlay .retry-link:hover { background: var(--accent); color: var(--accent-fg); }
+
     @media (max-width: 640px) {
       .brand .subtitle { display: none; }
       .cta { padding: 7px 10px; font-size: 12px; }
@@ -130,12 +177,97 @@
       </div>
     </header>
     <main class="stage">
+      <div class="wake-overlay" id="wakeOverlay">
+        <div class="spinner"></div>
+        <div class="msg" id="wakeMsg">
+          <strong>正在唤醒云端应用</strong><br />
+          首次访问需约 30–60 秒启动，请稍候。
+        </div>
+        <a class="retry-link" id="retryLink">点击重新加载</a>
+      </div>
       <iframe
+        class="app-frame"
+        id="appFrame"
         src="https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app/?embed=true&hsk_shell=1"
         title="HSK 4 级受控分级阅读与测评生成器"
         allow="clipboard-write; fullscreen"
       ></iframe>
     </main>
   </div>
+
+  <script>
+    (function () {
+      var APP_URL = "https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app";
+      var SRC = APP_URL + "/?embed=true&hsk_shell=1";
+
+      // iframe 的 onload 触发得太早：平台 nginx 会先返回一个静态 SPA 外壳，
+      // 约 0.5 秒就 load 完了，此时 Python 进程可能还在冷启动。跨域又拿不到
+      // 应用内部状态，所以只能「固定最短展示时长」来掩盖 Streamlit 自身的
+      // 加载界面，而不是一收到 onload 就撤掉遮罩。
+      var MIN_SHOW = 7000;   // 遮罩最短展示时长
+      var SLOW_AFTER = 20000; // 超过此时长仍无 onload -> 换文案
+      var FAIL_AFTER = 60000; // 超过此时长仍无 onload -> 给出重试按钮
+
+      var frame = document.getElementById("appFrame");
+      var overlay = document.getElementById("wakeOverlay");
+      var msg = document.getElementById("wakeMsg");
+      var retry = document.getElementById("retryLink");
+
+      var startedAt = 0;
+      var loaded = false;
+      var hideTimer = null;
+      var slowTimer = null;
+      var failTimer = null;
+
+      function clearTimers() {
+        clearTimeout(hideTimer);
+        clearTimeout(slowTimer);
+        clearTimeout(failTimer);
+      }
+
+      function begin() {
+        loaded = false;
+        startedAt = Date.now();
+        clearTimers();
+        retry.style.display = "none";
+        msg.innerHTML = "<strong>正在唤醒云端应用</strong><br />首次访问需约 30–60 秒启动，请稍候。";
+        overlay.classList.remove("hidden");
+
+        slowTimer = setTimeout(function () {
+          if (!loaded) {
+            msg.innerHTML = "<strong>仍在唤醒云端应用</strong><br />应用正在启动，通常 30–60 秒内完成。";
+          }
+        }, SLOW_AFTER);
+
+        failTimer = setTimeout(function () {
+          if (!loaded) {
+            msg.innerHTML = "<strong>加载超时</strong><br />请检查网络后点击下方按钮重新加载。";
+            retry.style.display = "inline-block";
+          }
+        }, FAIL_AFTER);
+      }
+
+      // 应用渲染完成（或加载失败）后触发
+      frame.addEventListener("load", function () {
+        loaded = true;
+        clearTimeout(slowTimer);
+        clearTimeout(failTimer);
+        var wait = Math.max(MIN_SHOW - (Date.now() - startedAt), 0);
+        hideTimer = setTimeout(function () {
+          overlay.classList.add("hidden");
+        }, wait);
+      });
+
+      retry.addEventListener("click", function () {
+        frame.src = "";
+        setTimeout(function () {
+          frame.src = SRC;
+          begin();
+        }, 150);
+      });
+
+      begin();
+    })();
+  </script>
 </body>
 </html>

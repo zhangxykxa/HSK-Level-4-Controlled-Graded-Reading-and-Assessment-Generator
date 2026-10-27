@@ -1,44 +1,42 @@
 name: Streamlit Keep-Alive
 
-# 定时访问 Streamlit Community Cloud 应用容器，避免免费层因闲置而休眠，
-# 导致访问者首次打开时长时间白屏。
+# 用「真实浏览器访问」防止 Streamlit Community Cloud 免费层进入 12 小时闲置休眠。
 #
-# ⚠️ 关键：Streamlit Community Cloud 的 `/` 与 `/_stcore/health` 是由平台
-# nginx 静态托管的「平台 SPA 外壳」（约 9782 字节 HTML，带 GTM / status 页
-# 嵌入），请求根本不会到达应用容器，因此对这两条路径做 curl 起不到任何保活
-# 作用（只会得到一个假 success）。
+# ⚠️ 为什么不用 curl / UptimeRobot：
+#   平台只把"执行了 JS 并建立了 WebSocket 会话的浏览器访问"算作活动。纯 HTTP GET
+#   无论打哪个路径都不会唤醒沉睡的应用，只能拿到 nginx 托管的静态 SPA 外壳
+#   （约 9782 字节），表现为一次"假成功"（历史上有 18 次 success 却仍在休眠）。
 #
-# 应用容器实际挂在 `/~/+/` 前缀下：
-#   GET /~/+/                -> 应用自身的 index.html（6467 字节）
-#   GET /~/+/_stcore/health  -> 应用运行时返回纯文本 "ok"；休眠时拿不到
-# 本工作流探测后者，确保每次请求都真正打到应用容器。
+# 路径归属备忘：
+#   /                       -> 平台 nginx 静态 SPA 外壳（9782 B）
+#   /_stcore/health         -> 同上，被 nginx 兜底路由
+#   /healthz                -> nginx 边缘健康检查（与应用容器无关）
+#   /~/+/                   -> 应用容器自身的 index.html（6467 B）
+#   /~/+/_stcore/health     -> 应用容器存活探针：醒着返回 ok，休眠返回 400
 on:
   schedule:
-    # 每 15 分钟一次（GitHub Actions 的 cron 使用 UTC 时间）。
-    # 注：schedule 是 best-effort，高峰期会被排队延迟数小时，故用高频对冲。
-    - cron: "*/15 * * * *"
+    # 每 2 小时一次（cron 使用 UTC）。休眠阈值是 12 小时，留 6 倍余量以对冲
+    # GitHub Actions schedule 的 best-effort 延迟（高峰期可能推迟数小时）。
+    - cron: "0 */2 * * *"
   # 支持在 Actions 页面手动触发一次，便于验证
   workflow_dispatch:
 
 jobs:
-  ping:
+  keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Ping app container
-        run: |
-          BASE="https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app"
-          for P in "/~/+/" "/~/+/_stcore/health"; do
-            echo "==> GET $BASE$P"
-            curl -sS -L --max-time 90 \
-              -o /dev/null \
-              -w "    HTTP %{http_code} | %{time_total}s\n" \
-              "$BASE$P" || echo "    请求失败（应用可能正在冷启动，稍后自动重试即可）"
-          done
+      - uses: actions/checkout@v4
 
-          HEALTH="$(curl -sS -L --max-time 90 "$BASE/~/+/_stcore/health" || true)"
-          if [ "$HEALTH" = "ok" ]; then
-            echo "✅ 应用容器存活（/_stcore/health = ok）"
-          else
-            echo "::warning::应用容器未返回 ok（实际返回: '$HEALTH'）—— 可能已休眠，需用浏览器访问唤醒"
-          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright + Chromium
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Visit app with a headless browser (keep alive / wake)
+        run: python .github/scripts/keepalive.py
