@@ -1,6 +1,11 @@
 import hashlib
+import json
 import os
 import random
+import threading
+import time
+import urllib.request
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -1307,6 +1312,148 @@ def _secret(key: str):
         return None
 
 
+# ============================================================
+# 后台历史记录（Google Sheet 埋点）
+# ============================================================
+# 设计原则：
+#   1) 未在 st.secrets 配置 HISTORY_ENDPOINT 时完全静默 → 本地运行 / 原页面调试零影响；
+#   2) 只用 Python 标准库（urllib）+ 后台线程上报 → 不新增依赖、不阻塞界面；
+#   3) 以「会话 ID」为主键，同一访客多次事件在表格里 upsert 成同一行；
+#   4) IP 只记网段（如 116.25.x.x）→ 既能区分被试，又不构成可直接识别个人的信息。
+# ============================================================
+def _is_private_ip(ip: str) -> bool:
+    """判断是否为内网 / 回环 / 保留地址（这类地址通常是平台代理，不能代表访客）。"""
+    try:
+        import ipaddress
+
+        addr = ipaddress.ip_address(str(ip).split("%")[0])
+        return bool(
+            addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local
+        )
+    except Exception:
+        return False
+
+
+def _client_ip() -> str:
+    """尽力获取访客真实 IP：先解析代理头 X-Forwarded-For（最左端为原始客户端），
+    再退回 st.context.ip_address（Streamlit ≥1.45 的连接 IP）；都拿不到返回空串。"""
+    try:
+        headers = st.context.headers
+        for key in ("X-Forwarded-For", "x-forwarded-for", "X-Real-IP", "x-real-ip"):
+            raw = headers.get(key)
+            if not raw:
+                continue
+            for part in str(raw).split(","):
+                cand = part.strip()
+                if cand and not _is_private_ip(cand):
+                    return cand
+    except Exception:
+        pass
+    try:
+        ip = str(getattr(st.context, "ip_address", "") or "").strip()
+        if ip and not _is_private_ip(ip):
+            return ip
+    except Exception:
+        pass
+    return ""
+
+
+def _mask_ip(ip: str) -> str:
+    """IP 脱敏：IPv4 只保留前两段（116.25.x.x），IPv6 只保留前两组。"""
+    if not ip:
+        return "未知"
+    parts = str(ip).split(".")
+    if len(parts) == 4:
+        return ".".join(parts[:2] + ["x", "x"])
+    segs = [s for s in str(ip).split(":") if s]
+    return ":".join(segs[:2]) + "::x" if len(segs) >= 2 else str(ip)
+
+
+def _history_post(url: str, payload: dict) -> None:
+    """实际执行 POST（在后台线程里跑）。任何异常都吞掉：埋点失败绝不能影响教学功能。"""
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10).read()
+    except Exception:
+        pass
+
+
+def _log_history(event: str) -> None:
+    """把当前会话快照上报到 Google Sheet（未配置端点 / 保活探测访问时直接跳过）。"""
+    if st.session_state.get("_hist_skip"):
+        return
+    url = _secret("HISTORY_ENDPOINT")
+    if not url:
+        return
+    ctx = st.session_state.get("_hist_ctx", {})
+    started = st.session_state.get("_hist_started_at")
+    payload = {
+        "会话ID": st.session_state.get("_hist_id", ""),
+        "IP网段": st.session_state.get("_hist_ip", "未知"),
+        "入口": "壳页" if _embed_mode else "原页面",
+        "首次打开": st.session_state.get("_hist_opened_at", ""),
+        "最后活动": _format_generation_time(),
+        "使用时长(秒)": int(time.time() - started) if started else 0,
+        "大纲": ctx.get("syllabus", ""),
+        "主题": ctx.get("topic", ""),
+        "核心词": ctx.get("words", ""),
+        "生成文章": st.session_state.get("generated_text", ""),
+        "单选题": st.session_state.get("_hist_mcq", ""),
+        "用户作答": st.session_state.get("_hist_answers", ""),
+        "得分": st.session_state.get("_hist_score", ""),
+        "事件": event,
+    }
+    try:
+        threading.Thread(
+            target=_history_post, args=(str(url), payload), daemon=True
+        ).start()
+    except Exception:
+        pass
+
+
+def _log_mcq(mcq_list) -> None:
+    """记录生成的单选题原文（「一键出题」成功后调用）。"""
+    st.session_state["_hist_mcq"] = "\n".join(
+        f"{i}. {q['question']} "
+        + " ".join(f"{k}. {q['options'][k]}" for k in ("A", "B", "C", "D"))
+        + f"　【答案】{q['answer']}"
+        for i, q in enumerate(mcq_list, 1)
+    )
+    _log_history("生成题目")
+
+
+def _log_submission(mcq_list) -> None:
+    """记录考生作答与得分（「提交答案」时调用）。"""
+    ans = st.session_state.get("mcq_answers", {})
+    st.session_state["_hist_answers"] = "；".join(
+        f"第{i}题 {ans.get(i - 1, '未作答')}" for i in range(1, len(mcq_list) + 1)
+    )
+    st.session_state["_hist_score"] = (
+        f"{sum(1 for i, q in enumerate(mcq_list) if ans.get(i) == q['answer'])}"
+        f"/{len(mcq_list)}"
+    )
+    _log_history("提交作答")
+
+
+# —— 会话初始化：只在每次浏览器会话的第一次脚本运行时执行 ——
+if "_hist_started_at" not in st.session_state:
+    st.session_state["_hist_started_at"] = time.time()
+    st.session_state["_hist_id"] = uuid.uuid4().hex[:12]
+    st.session_state["_hist_opened_at"] = _format_generation_time()
+    st.session_state["_hist_ip"] = _mask_ip(_client_ip())
+    st.session_state["_hist_ctx"] = {}
+    # 保活脚本（Playwright）的访问带 hsk_probe=1，不计入教学使用记录
+    st.session_state["_hist_skip"] = str(
+        st.query_params.get("hsk_probe", "")
+    ).lower() in ("1", "true", "yes")
+    _log_history("打开")
+
+
 def _clean_token(v):
     """规整 API Key / 模型名：剥除 'Bearer ' 前缀，仅保留 ASCII 可见字符，
     剔除所有空白（含内部）与非 ASCII 字符。
@@ -1891,6 +2038,13 @@ with st.sidebar:
     )
     render_locked_words(locked_words, theme_choice, columns_per_row=1)
 
+    # —— 后台历史记录：缓存本轮上下文（大纲 / 主题 / 核心词），供埋点上报使用 ——
+    st.session_state["_hist_ctx"] = {
+        "syllabus": syllabus_version,
+        "topic": theme_choice,
+        "words": "、".join(str(w) for w in locked_words["Word"].tolist()),
+    }
+
 # --- 大模型 API 配置（云端 secrets 优先，侧边栏手动输入兜底）---
 st.sidebar.markdown("### 🤖 大模型 API 配置")
 
@@ -2159,6 +2313,11 @@ with col1:
                         # （导出区每次 rerun 都会执行，不能直接依赖局部变量）
                         st.session_state["last_generation_model"] = model_r
                         st.session_state["last_generated_at"] = _format_generation_time()
+                        # —— 后台历史记录：新一轮文章生成，清空上一轮题目相关记录后上报
+                        st.session_state.update(
+                            {"_hist_mcq": "", "_hist_answers": "", "_hist_score": ""}
+                        )
+                        _log_history("生成文章")
                         st.success("✨ 文章生成成功！")
                         st.markdown("---")
                         st.markdown("**💡 本轮锁定的核心词 (Vocabulary Tooltips):**")
@@ -2253,6 +2412,7 @@ with col2:
                         st.session_state["mcq_submitted"] = False
                         st.session_state["mcq_answers"] = {}
                         st.success(f"✨ 成功生成 {len(mcq_list)} 道题目！请作答后提交查看解析。")
+                        _log_mcq(mcq_list)
 
     # —— 渲染交互式答题区 ——
     mcq_list = st.session_state.get("mcq_questions")
@@ -2280,6 +2440,7 @@ with col2:
 
         if submit_clicked:
             st.session_state["mcq_submitted"] = True
+            _log_submission(mcq_list)
 
         if st.session_state.get("mcq_submitted"):
             correct_count = 0

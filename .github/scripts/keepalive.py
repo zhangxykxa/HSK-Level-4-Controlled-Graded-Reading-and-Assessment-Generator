@@ -78,7 +78,8 @@ def main() -> int:
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
         page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(APP_URL, wait_until="domcontentloaded", timeout=120_000)
+        # 带 hsk_probe=1：应用据此把本次访问识别为"保活探测"，不计入后台使用记录
+        page.goto(APP_URL + "/?hsk_probe=1", wait_until="domcontentloaded", timeout=120_000)
 
         state = probe_state(page, 30_000)
 
