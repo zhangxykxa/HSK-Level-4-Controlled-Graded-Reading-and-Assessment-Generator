@@ -4,6 +4,7 @@ import os
 import random
 import threading
 import time
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime
@@ -1379,9 +1380,34 @@ def _mask_ip(ip: str) -> str:
     return ":".join(segs[:2]) + "::x" if len(segs) >= 2 else str(ip)
 
 
-def _history_post(url: str, payload: dict) -> None:
+def _geo_region(ip: str) -> str:
+    """按 IP 反查归属地（服务端兜底）：返回「国家 · 省/州 · 城市」，失败返回空串。"""
+    if not ip:
+        return ""
+    try:
+        req = urllib.request.Request(
+            "https://ipwho.is/" + urllib.parse.quote(str(ip)),
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        d = json.loads(urllib.request.urlopen(req, timeout=5).read().decode("utf-8"))
+        if not isinstance(d, dict) or d.get("success") is False:
+            return ""
+        parts = []
+        for key in ("country", "region", "city"):
+            v = str(d.get(key) or "").strip()
+            if v and v not in parts:
+                parts.append(v)
+        return " · ".join(parts)
+    except Exception:
+        return ""
+
+
+def _history_post(url: str, payload: dict, ip: str = "") -> None:
     """实际执行 POST（在后台线程里跑）。任何异常都吞掉：埋点失败绝不能影响教学功能。"""
     try:
+        # 壳页没带回归属地时，在后台线程里用 IP 兜底反查（放这里是为了不阻塞界面）
+        if ip and not payload.get("IP地区"):
+            payload["IP地区"] = _geo_region(ip)
         req = urllib.request.Request(
             url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -1404,7 +1430,7 @@ def _log_history(event: str) -> None:
     started = st.session_state.get("_hist_started_at")
     payload = {
         "会话ID": st.session_state.get("_hist_id", ""),
-        "IP网段": st.session_state.get("_hist_ip", "未知"),
+        "IP网段": _mask_ip(st.session_state.get("_hist_ip", "")),
         "IP地区": st.session_state.get("_hist_region", ""),
         "入口": "壳页" if _embed_mode else "原页面",
         "首次打开": st.session_state.get("_hist_opened_at", ""),
@@ -1421,7 +1447,9 @@ def _log_history(event: str) -> None:
     }
     try:
         threading.Thread(
-            target=_history_post, args=(str(url), payload), daemon=True
+            target=_history_post,
+            args=(str(url), payload, st.session_state.get("_hist_ip", "")),
+            daemon=True,
         ).start()
     except Exception:
         pass
@@ -1456,7 +1484,7 @@ if "_hist_started_at" not in st.session_state:
     st.session_state["_hist_started_at"] = time.time()
     st.session_state["_hist_id"] = uuid.uuid4().hex[:12]
     st.session_state["_hist_opened_at"] = _format_generation_time()
-    st.session_state["_hist_ip"] = _mask_ip(_client_ip())
+    st.session_state["_hist_ip"] = _client_ip()
     st.session_state["_hist_region"] = str(st.query_params.get("hsk_region", "")).strip()
     st.session_state["_hist_ctx"] = {}
     # 保活脚本（Playwright）的访问带 hsk_probe=1，不计入教学使用记录
@@ -1470,7 +1498,11 @@ if "_hist_started_at" not in st.session_state:
 if str(st.query_params.get("hsk_diag", "")).lower() in ("1", "true", "yes"):
     with st.expander("🔧 历史记录上报自检", expanded=True):
         st.write("streamlit 版本：", st.__version__)
-        st.write("解析到的访客 IP：", repr(_client_ip()), "→ 网段", _mask_ip(_client_ip()))
+        st.write("解析到的访客 IP：", repr(st.session_state.get("_hist_ip", "")),
+                 "→ 网段", _mask_ip(st.session_state.get("_hist_ip", "")))
+        st.write("归属地（壳页传入）：", repr(st.session_state.get("_hist_region", "")))
+        st.write("归属地（服务端反查）：",
+                 repr(_geo_region(st.session_state.get("_hist_ip", ""))))
         st.write("hsk_ip 参数：", repr(st.query_params.get("hsk_ip", "")))
         st.write("hsk_region 参数：", repr(st.query_params.get("hsk_region", "")))
         st.write("st.context.ip_address：", repr(getattr(st.context, "ip_address", "无此属性")))
