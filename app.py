@@ -1335,8 +1335,18 @@ def _is_private_ip(ip: str) -> bool:
 
 
 def _client_ip() -> str:
-    """尽力获取访客真实 IP：先解析代理头 X-Forwarded-For（最左端为原始客户端），
-    再退回 st.context.ip_address（Streamlit ≥1.45 的连接 IP）；都拿不到返回空串。"""
+    """尽力获取访客真实 IP，按可靠性依次尝试：
+    1) 壳页由浏览器直接查到的公网 IP（经 hsk_ip 参数传入）—— Streamlit Cloud 的代理
+       不透传代理头，后端只能看到平台内网地址，所以这条路最可靠；
+    2) 请求头 X-Forwarded-For / X-Real-IP（最左端为原始客户端）；
+    3) st.context.ip_address（Streamlit ≥1.45 的连接 IP）。
+    都拿不到则返回空串。"""
+    try:
+        from_shell = str(st.query_params.get("hsk_ip", "")).strip()
+        if from_shell:
+            return from_shell
+    except Exception:
+        pass
     try:
         headers = st.context.headers
         for key in ("X-Forwarded-For", "x-forwarded-for", "X-Real-IP", "x-real-ip"):
@@ -1452,6 +1462,20 @@ if "_hist_started_at" not in st.session_state:
         st.query_params.get("hsk_probe", "")
     ).lower() in ("1", "true", "yes")
     _log_history("打开")
+
+
+# —— 上报自检：仅当 URL 带 ?hsk_diag=1 时渲染，平时完全不占界面 ——
+if str(st.query_params.get("hsk_diag", "")).lower() in ("1", "true", "yes"):
+    with st.expander("🔧 历史记录上报自检", expanded=True):
+        st.write("streamlit 版本：", st.__version__)
+        st.write("解析到的访客 IP：", repr(_client_ip()), "→ 网段", _mask_ip(_client_ip()))
+        st.write("hsk_ip 参数：", repr(st.query_params.get("hsk_ip", "")))
+        st.write("st.context.ip_address：", repr(getattr(st.context, "ip_address", "无此属性")))
+        st.write("HISTORY_ENDPOINT 已配置：", bool(_secret("HISTORY_ENDPOINT")))
+        try:
+            st.json(dict(st.context.headers))
+        except Exception as _diag_err:
+            st.write("读取请求头失败：", repr(_diag_err))
 
 
 def _clean_token(v):

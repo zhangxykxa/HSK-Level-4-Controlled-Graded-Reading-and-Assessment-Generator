@@ -188,7 +188,6 @@
       <iframe
         class="app-frame"
         id="appFrame"
-        src="https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app/?embed=true&hsk_shell=1"
         title="HSK 4 级受控分级阅读与测评生成器"
         allow="clipboard-write; fullscreen"
       ></iframe>
@@ -198,7 +197,9 @@
   <script>
     (function () {
       var APP_URL = "https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app";
-      var SRC = APP_URL + "/?embed=true&hsk_shell=1";
+      var BASE_SRC = APP_URL + "/?embed=true&hsk_shell=1";
+      var SRC = BASE_SRC;
+      var IP_WAIT = 1500;   // 取公网 IP 的最长等待时间，超时就直接加载
 
       // iframe 的 onload 触发得太早：平台 nginx 会先返回一个静态 SPA 外壳，
       // 约 0.5 秒就 load 完了，此时 Python 进程可能还在冷启动。跨域又拿不到
@@ -266,7 +267,25 @@
         }, 150);
       });
 
-      begin();
+      // Streamlit Cloud 的代理不透传 X-Forwarded-For，后端只能看到平台内网地址，
+      // 所以改由浏览器直接向公共 IP 服务查询访客公网 IP，再用 hsk_ip 参数交给
+      // 应用落库（应用只保留网段，如 116.25.x.x）。
+      function fetchIp() {
+        return new Promise(function (resolve) {
+          var ctl = new AbortController();
+          var timer = setTimeout(function () { ctl.abort(); resolve(""); }, IP_WAIT);
+          fetch("https://api.ipify.org?format=json", { signal: ctl.signal })
+            .then(function (r) { return r.json(); })
+            .then(function (d) { clearTimeout(timer); resolve(d && d.ip ? d.ip : ""); })
+            .catch(function () { clearTimeout(timer); resolve(""); });
+        });
+      }
+
+      fetchIp().then(function (ip) {
+        if (ip) { SRC = BASE_SRC + "&hsk_ip=" + encodeURIComponent(ip); }
+        frame.src = SRC;
+        begin();
+      });
     })();
   </script>
 </body>
