@@ -1405,6 +1405,7 @@ def _log_history(event: str) -> None:
     payload = {
         "会话ID": st.session_state.get("_hist_id", ""),
         "IP网段": st.session_state.get("_hist_ip", "未知"),
+        "IP地区": st.session_state.get("_hist_region", ""),
         "入口": "壳页" if _embed_mode else "原页面",
         "首次打开": st.session_state.get("_hist_opened_at", ""),
         "最后活动": _format_generation_time(),
@@ -1456,6 +1457,7 @@ if "_hist_started_at" not in st.session_state:
     st.session_state["_hist_id"] = uuid.uuid4().hex[:12]
     st.session_state["_hist_opened_at"] = _format_generation_time()
     st.session_state["_hist_ip"] = _mask_ip(_client_ip())
+    st.session_state["_hist_region"] = str(st.query_params.get("hsk_region", "")).strip()
     st.session_state["_hist_ctx"] = {}
     # 保活脚本（Playwright）的访问带 hsk_probe=1，不计入教学使用记录
     st.session_state["_hist_skip"] = str(
@@ -1470,6 +1472,7 @@ if str(st.query_params.get("hsk_diag", "")).lower() in ("1", "true", "yes"):
         st.write("streamlit 版本：", st.__version__)
         st.write("解析到的访客 IP：", repr(_client_ip()), "→ 网段", _mask_ip(_client_ip()))
         st.write("hsk_ip 参数：", repr(st.query_params.get("hsk_ip", "")))
+        st.write("hsk_region 参数：", repr(st.query_params.get("hsk_region", "")))
         st.write("st.context.ip_address：", repr(getattr(st.context, "ip_address", "无此属性")))
         st.write("HISTORY_ENDPOINT 已配置：", bool(_secret("HISTORY_ENDPOINT")))
         try:

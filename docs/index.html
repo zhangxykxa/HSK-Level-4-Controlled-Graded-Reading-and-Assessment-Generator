@@ -199,7 +199,7 @@
       var APP_URL = "https://hsk-level-4-controlled-graded-reading-and-assessment-generator.streamlit.app";
       var BASE_SRC = APP_URL + "/?embed=true&hsk_shell=1";
       var SRC = BASE_SRC;
-      var IP_WAIT = 1500;   // 取公网 IP 的最长等待时间，超时就直接加载
+      var IP_WAIT = 2000;   // 查询访客 IP / 归属地的最长等待时间，超时就直接加载
 
       // iframe 的 onload 触发得太早：平台 nginx 会先返回一个静态 SPA 外壳，
       // 约 0.5 秒就 load 完了，此时 Python 进程可能还在冷启动。跨域又拿不到
@@ -268,21 +268,61 @@
       });
 
       // Streamlit Cloud 的代理不透传 X-Forwarded-For，后端只能看到平台内网地址，
-      // 所以改由浏览器直接向公共 IP 服务查询访客公网 IP，再用 hsk_ip 参数交给
-      // 应用落库（应用只保留网段，如 116.25.x.x）。
-      function fetchIp() {
+      // 所以改由浏览器直接查询访客公网 IP 与归属地，再用 hsk_ip / hsk_region 参数
+      // 交给应用落库（应用只保留 IP 网段，如 116.25.x.x）。
+      var IP_PROVIDERS = [
+        {
+          url: "https://ipwho.is/",
+          pick: function (d) {
+            return (d && d.success !== false && d.ip) ? [d.ip, [d.country, d.region, d.city]] : null;
+          }
+        },
+        {
+          url: "https://ipinfo.io/json",
+          pick: function (d) {
+            return (d && d.ip) ? [d.ip, [d.city, d.region]] : null;
+          }
+        },
+        {
+          url: "https://api.ipify.org?format=json",
+          pick: function (d) { return (d && d.ip) ? [d.ip, []] : null; }
+        }
+      ];
+
+      function joinParts(list) {
+        var parts = [];
+        (list || []).forEach(function (s) {
+          if (s && parts.indexOf(s) === -1) { parts.push(s); }
+        });
+        return parts.join(" · ");
+      }
+
+      function lookupIp() {
         return new Promise(function (resolve) {
-          var ctl = new AbortController();
-          var timer = setTimeout(function () { ctl.abort(); resolve(""); }, IP_WAIT);
-          fetch("https://api.ipify.org?format=json", { signal: ctl.signal })
-            .then(function (r) { return r.json(); })
-            .then(function (d) { clearTimeout(timer); resolve(d && d.ip ? d.ip : ""); })
-            .catch(function () { clearTimeout(timer); resolve(""); });
+          var deadline = Date.now() + IP_WAIT;
+          var i = 0;
+          (function next() {
+            if (i >= IP_PROVIDERS.length || Date.now() >= deadline) { resolve(null); return; }
+            var p = IP_PROVIDERS[i++];
+            var ctl = new AbortController();
+            var timer = setTimeout(function () { ctl.abort(); }, Math.max(deadline - Date.now(), 300));
+            fetch(p.url, { signal: ctl.signal })
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                clearTimeout(timer);
+                var v = p.pick(d);
+                if (v && v[0]) { resolve([v[0], joinParts(v[1])]); } else { next(); }
+              })
+              .catch(function () { clearTimeout(timer); next(); });
+          })();
         });
       }
 
-      fetchIp().then(function (ip) {
-        if (ip) { SRC = BASE_SRC + "&hsk_ip=" + encodeURIComponent(ip); }
+      lookupIp().then(function (v) {
+        if (v && v[0]) {
+          SRC = BASE_SRC + "&hsk_ip=" + encodeURIComponent(v[0]);
+          if (v[1]) { SRC += "&hsk_region=" + encodeURIComponent(v[1]); }
+        }
         frame.src = SRC;
         begin();
       });
