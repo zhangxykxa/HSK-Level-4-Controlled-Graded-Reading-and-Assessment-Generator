@@ -2227,7 +2227,7 @@ st.sidebar.write("---")
 st.sidebar.subheader("📋 学术研究说明 / Research Notice")
 st.sidebar.info(
     "🎓 欢迎您试用本系统。\n\n"
-    "本原型系统为 **香港理工大学专业进修学院（PolyU SPEED）语文及传意学部** "
+    "本原型系统为"
     "**「人工智能与科技辅助语言教学文学硕士」** 顶石研究项目 "
     "**LCS5026** 的开发成果。\n\n"
     "系统旨在通过生成式 AI 赋能 **HSK 4 级分级阅读生成** 与 "
