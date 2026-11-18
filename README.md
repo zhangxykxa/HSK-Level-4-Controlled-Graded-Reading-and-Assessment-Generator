@@ -71,8 +71,8 @@ streamlit run app.py
 
 ## 6. 学术规范与 AI 辅助声明 | Academic Integrity & AI Disclosure
 
-* 本研究原型系统的教学框架设计、双轨词库筛选标准、提示词工程（Prompt Engineering）策略及评估指标均由研究者独立制定与验证。部分前端样式代码、辅助脚本及技术文档在生成式 AI 编程工具（如 Gemini / AI Coding Assistants）的辅助下编写，并经由研究者完成全面测试与人工校验，符合 LCS5026 顶石项目学术诚信与透明性规范。
-* The pedagogical architecture, dual-syllabus lexical criteria, prompt engineering strategies, and evaluation metrics of this prototype were independently designed and validated by the student researcher. Portions of the boilerplate UI code, utility scripts, and technical documentation were drafted with the assistance of generative AI coding tools (e.g., Gemini and AI coding assistants) and were thoroughly audited, tested, and verified by the researcher in accordance with the academic integrity and transparency guidelines of the LCS5026 Capstone Project.
+* 本研究原型系统的教学框架设计、双轨词库筛选标准、提示词工程（Prompt Engineering）策略及评估指标均由研究者独立制定与验证。部分代码库、前端样式代码、辅助脚本及技术文档在生成式 AI 编程工具（如 Trae AI / Code Buddy / Gemini）的辅助下编写，并经由研究者完成全面测试与人工校验，符合 LCS5026 顶石项目学术诚信与透明性规范。
+* The pedagogical architecture, dual-syllabus lexical criteria, prompt engineering strategies, and evaluation metrics of this prototype were independently designed and validated by the student researcher. Portions of the codebase, the boilerplate UI code, utility scripts, and technical documentation were drafted with the assistance of generative AI coding tools ( Trae AI / Code Buddy / Gemini ) and were thoroughly audited, tested, and verified by the researcher in accordance with the academic integrity and transparency guidelines of the LCS5026 Capstone Project.
 
 ---
 
